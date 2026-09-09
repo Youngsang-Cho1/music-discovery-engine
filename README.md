@@ -29,14 +29,16 @@ up against listeners.
 
 ```
                   ┌──────────────────────── ingestion (offline) ─────────────────────────┐
-   Jamendo API ──►  fetch CC-licensed tracks ──► decode 10s window ──► CLAP encoder
-   (official,                                          │                     │
-    licensed)                                          ▼                     ▼
-                                        librosa scalar descriptors     512-d embedding
-                                                       │                     │
-                                                       ▼                     ▼
+   Jamendo API ──►  fetch CC-licensed tracks ──► decode 3 × 10s windows ──► CLAP
+   (official,                                          │                      │
+    licensed)                                          ▼                      ▼
+                                        librosa scalar descriptors      mean-pooled
+                                          (middle window)               512-d vector
+                                                       │                      │
+                                                       ▼                      ▼
                                                    Postgres              Qdrant (HNSW)
                                               (catalog + events)        (audio vectors)
+                                          audio is discarded after embedding
                   └──────────────────────────────────────────────────────────────────────┘
 
                   ┌───────────────────────── serving (online) ───────────────────────────┐

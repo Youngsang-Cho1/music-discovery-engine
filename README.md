@@ -339,11 +339,12 @@ Needs ~2 GB; the healthcheck timeout is 300s because the image warms CLAP at sta
 
 ```bash
 docker compose up -d postgres      # the API tests need a real database
-cd backend  && pytest tests -q     # 107 tests
+cd backend  && pytest tests -q     # 119 tests
+cd frontend && npm test            # 11 tests
 cd frontend && npm run build       # typecheck + production build
 ```
 
-**Unit** (78) — signal fusion, MMR diversity and the artist cap, descriptor extraction against
+**Unit** (90) — signal fusion, MMR diversity and the artist cap, descriptor extraction against
 synthetic signals with known ground truth, cache key construction and failure degradation, the
 Jamendo client's empty-page retry, waveform decoding from truncated downloads, and the
 Beta-posterior math including the small-sample case a naive rate comparison gets wrong.
@@ -355,7 +356,11 @@ would skip the SQL most worth checking. Covered: cluster recovery, the artist ca
 actually diversifies, text search degrading to 503 rather than 500, and each event type moving the
 posterior the right way — including that a late skip is *not* counted against the arm.
 
-The suite runs against a dedicated `mde_test` database and refuses to start if pointed at the
+The frontend suite covers the display logic that has real branching — duration formatting, the
+"why this track" label, and descriptor translation including clamping, since a beat-tracking octave
+error would otherwise render a bar wider than its container.
+
+The backend suite runs against a dedicated `mde_test` database and refuses to start if pointed at the
 development one, because it truncates between tests. It skips automatically if Postgres isn't
 reachable.
 

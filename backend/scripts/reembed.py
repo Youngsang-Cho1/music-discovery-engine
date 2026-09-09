@@ -62,7 +62,9 @@ async def reembed(limit: int | None, dry_run: bool) -> None:
     store.ensure_collection()
 
     with SessionLocal() as db:
-        stmt = select(Track.id, Track.audio_url, Track.artist_id, Track.tags).where(
+        stmt = select(
+            Track.id, Track.audio_url, Track.artist_id, Track.tags, Track.listens
+        ).where(
             Track.audio_url.isnot(None)
         )
         if limit:
@@ -114,6 +116,7 @@ async def reembed(limit: int | None, dry_run: bool) -> None:
                             {
                                 "artist_id": row.artist_id,
                                 "tags": row.tags or [],
+                                "listens": row.listens or 0,
                                 **features,
                             },
                         )

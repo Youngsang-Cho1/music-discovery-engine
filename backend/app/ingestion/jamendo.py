@@ -50,6 +50,11 @@ class JamendoTrack:
     acoustic_electric: str | None = None
     vocal_instrumental: str | None = None
     lang: str | None = None
+    # Play count. The `novelty` ranking signal is defined against this, so
+    # without it the discovery arm scores every track identically and the
+    # long-tail claim quietly stops being tested.
+    listens: int = 0
+    favorites: int = 0
 
     @classmethod
     def from_api(cls, row: dict[str, Any]) -> "JamendoTrack":
@@ -74,6 +79,8 @@ class JamendoTrack:
             license_url=row.get("license_ccurl"),
             share_url=row.get("shareurl"),
             tags=sorted(set(tags)),
+            listens=int((row.get("stats") or {}).get("rate_listened_total") or 0),
+            favorites=int((row.get("stats") or {}).get("favorited") or 0),
             speed=musicinfo.get("speed"),
             acoustic_electric=musicinfo.get("acousticelectric"),
             vocal_instrumental=musicinfo.get("vocalinstrumental"),
@@ -135,7 +142,7 @@ class JamendoClient:
             "offset": offset,
             "order": order,
             "audioformat": audioformat,
-            "include": "musicinfo licenses",
+            "include": "musicinfo licenses stats",
             "imagesize": 300,
         }
         if tags:
@@ -163,6 +170,25 @@ class JamendoClient:
 
         tracks = [JamendoTrack.from_api(r) for r in rows]
         return [t for t in tracks if t.audio_url]
+
+    async def fetch_stats(self, track_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Play counts for specific track ids, keyed by id.
+
+        Metadata-only: no audio is fetched, so refreshing popularity across the
+        whole catalog costs one request per 200 tracks.
+        """
+        if not track_ids:
+            return {}
+
+        rows = await self._get(
+            "tracks",
+            {
+                "id": " ".join(track_ids),
+                "limit": MAX_LIMIT,
+                "include": "stats",
+            },
+        )
+        return {str(r["id"]): (r.get("stats") or {}) for r in rows}
 
     async def iter_tracks(
         self,

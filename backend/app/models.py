@@ -57,6 +57,12 @@ class Track(Base):
     vocal_instrumental: Mapped[str | None] = mapped_column(String(16))
     lang: Mapped[str | None] = mapped_column(String(16))
 
+    # Popularity, mirrored from Jamendo. Stored rather than only pushed to the
+    # vector payload so `scripts/reembed.py` can rebuild that payload without
+    # re-querying the API.
+    listens: Mapped[int] = mapped_column(Integer, default=0)
+    favorites: Mapped[int] = mapped_column(Integer, default=0)
+
     # Audio-derived scalar descriptors, computed in the ingestion pipeline.
     features: Mapped[dict | None] = mapped_column(JSON, default=dict)
 

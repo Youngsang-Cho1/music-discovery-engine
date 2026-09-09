@@ -74,6 +74,8 @@ def _upsert_track(db, track: JamendoTrack, features: dict) -> None:
         "acoustic_electric": track.acoustic_electric,
         "vocal_instrumental": track.vocal_instrumental,
         "lang": track.lang,
+        "listens": track.listens,
+        "favorites": track.favorites,
         "features": features,
         "embedded": True,
     }
@@ -232,6 +234,7 @@ def _flush(batch, store: VectorStore, sample_rate: int) -> int:
                     {
                         "artist_id": track.artist_id,
                         "tags": track.tags,
+                        "listens": track.listens,
                         "tempo_bpm": features.get("tempo_bpm"),
                         **{k: v for k, v in features.items() if k != "tempo_bpm"},
                     },

@@ -83,6 +83,20 @@ class VectorStore:
         ]
         self.client.upsert(collection_name=self.collection, points=points, wait=True)
 
+    def set_payloads(self, records: list[tuple[str, dict[str, Any]]]) -> None:
+        """Replace payloads without touching the vectors.
+
+        Metadata like play counts changes far more often than the audio does;
+        re-embedding to update a number would mean re-downloading every track.
+        """
+        for track_id, payload in records:
+            self.client.set_payload(
+                collection_name=self.collection,
+                payload={"track_id": track_id, **payload},
+                points=[_point_id(track_id)],
+                wait=False,
+            )
+
     def get_vector(self, track_id: str) -> np.ndarray | None:
         records = self.client.retrieve(
             collection_name=self.collection,

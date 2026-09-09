@@ -154,3 +154,38 @@ def test_missing_client_id_fails_loudly(monkeypatch):
             JamendoClient(client_id="")
     finally:
         get_settings.cache_clear()
+
+
+# --- popularity ---------------------------------------------------------
+
+
+def test_play_count_is_captured():
+    """`novelty` is defined against this. When it wasn't parsed, every track
+    scored novelty 1.0 and the discovery arm silently ranked identically to a
+    plain similarity arm — on real data only; fixtures that set `listens` by
+    hand kept the unit tests green."""
+    row = {**ROW, "stats": {"rate_listened_total": 704868, "favorited": 303}}
+    track = JamendoTrack.from_api(row)
+    assert track.listens == 704868
+    assert track.favorites == 303
+
+
+def test_missing_stats_defaults_to_zero():
+    track = JamendoTrack.from_api(ROW)
+    assert track.listens == 0
+    assert track.favorites == 0
+
+
+def test_stats_are_requested_from_the_api(client, monkeypatch):
+    """The field is only present if `include` asks for it."""
+    captured = {}
+
+    async def fake_get(_path, params):
+        captured.update(params)
+        return [ROW]
+
+    monkeypatch.setattr(client, "_get", fake_get)
+    import asyncio
+
+    asyncio.run(client.fetch_tracks(limit=1))
+    assert "stats" in captured["include"]

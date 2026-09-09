@@ -79,6 +79,14 @@ export function PlayerBar() {
           similar
         </Link>
 
+        {/* Shortcuts are worthless if nobody knows they exist. */}
+        <span
+          title="Space play/pause · ← → seek 10s · N next · L like"
+          className="hidden shrink-0 cursor-help font-mono text-[10px] text-white/20 xl:block"
+        >
+          ␣ ← → N L
+        </span>
+
         {/* Attribution is a licence condition for the CC tracks we stream. */}
         {current.license_url && (
           <a

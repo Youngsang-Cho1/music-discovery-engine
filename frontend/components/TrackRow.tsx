@@ -15,6 +15,22 @@ interface Props {
   index?: number;
 }
 
+/** Three bars that only animate while audio is actually playing, so the row
+ *  distinguishes "current and playing" from "current but paused". */
+function EqualizerBars() {
+  return (
+    <span aria-hidden className="flex h-3 items-end gap-[2px]">
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className="w-[2px] animate-[eq_0.9s_ease-in-out_infinite] rounded-sm bg-white/70"
+          style={{ animationDelay: `${i * 0.15}s`, height: "100%" }}
+        />
+      ))}
+    </span>
+  );
+}
+
 export function TrackRow({ track, context, queue, signals, index }: Props) {
   const { current, isPlaying, play, toggle } = usePlayer();
   const isCurrent = current?.id === track.id;
@@ -27,12 +43,18 @@ export function TrackRow({ track, context, queue, signals, index }: Props) {
       }`}
     >
       {index !== undefined && (
-        <span
-          className={`w-6 shrink-0 text-right text-xs tabular-nums ${
-            isCurrent ? "text-white/70" : "text-white/25"
-          }`}
-        >
-          {index + 1}
+        <span className="flex w-6 shrink-0 justify-end">
+          {isCurrent && isPlaying ? (
+            <EqualizerBars />
+          ) : (
+            <span
+              className={`text-xs tabular-nums ${
+                isCurrent ? "text-white/70" : "text-white/25"
+              }`}
+            >
+              {index + 1}
+            </span>
+          )}
         </span>
       )}
 

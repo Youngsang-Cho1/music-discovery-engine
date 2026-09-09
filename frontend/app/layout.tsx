@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
+import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import { PlayerBar } from "@/components/PlayerBar";
 import { PlayerProvider } from "@/components/PlayerProvider";
 
@@ -53,6 +54,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           </main>
 
           <PlayerBar />
+          <KeyboardShortcuts />
         </PlayerProvider>
       </body>
     </html>

@@ -11,6 +11,29 @@ jobs:
     defaults:
       run:
         working-directory: backend
+
+    # The API tests run against real Postgres — the ingestion and bandit paths
+    # use ON CONFLICT, so testing on a different dialect would skip the SQL
+    # that most needs checking. Qdrant is faked in-process instead.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mde
+          POSTGRES_PASSWORD: mde
+          POSTGRES_DB: mde
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mde"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://mde:mde@localhost:5432/mde
+      DATABASE_URL: postgresql+psycopg://mde:mde@localhost:5432/mde
+
     steps:
       - uses: actions/checkout@v4
 
@@ -30,7 +53,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install fastapi pydantic pydantic-settings sqlalchemy numpy scipy \
-                      httpx qdrant-client tenacity librosa soundfile pytest ruff
+                      httpx "psycopg[binary]" redis qdrant-client tenacity \
+                      librosa soundfile pytest ruff
 
       - name: Lint
         run: ruff check app tests scripts

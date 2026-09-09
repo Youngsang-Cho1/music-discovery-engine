@@ -193,6 +193,46 @@ score correct, the list useless.
 Each response carries its per-signal breakdown, so the UI can say *why* a track was picked
 ("similar tempo & energy", "hidden gem") instead of presenting an unexplained ranking.
 
+### Weights are set against in-pool spread, not nominal range
+
+A signal's weight multiplies its spread *within a candidate pool*, and those
+spreads differ far more than the 0-1 ranges suggest. Stage 1 has already
+selected acoustically similar tracks, so audio cosines arrive clustered, while
+novelty still spans almost the whole range:
+
+| Signal | Mean spread in a pool | Weight (`discovery`) | Effective pull |
+| --- | ---: | ---: | ---: |
+| audio | 0.127 | 1.00 | 0.127 |
+| tag | 0.510 | 0.20 | 0.102 |
+| descriptor | 0.129 | 0.30 | 0.039 |
+| novelty | 0.937 | 0.08 | 0.075 |
+
+`discovery` originally weighted novelty at 0.35 — an effective pull of 0.328,
+**2.6x audio's**. It stopped being a tie-breaker and became the ranking:
+**100%** of its results were zero-play tracks regardless of how well they
+matched. At 0.08 the arm shifts hard toward the long tail while giving up
+almost no relevance:
+
+| Arm | Median plays in results | Zero-play share | Mean audio similarity |
+| --- | ---: | ---: | ---: |
+| `control` | 244,760 | 41.8% | 0.807 |
+| `discovery` | 642 | 87.2% | 0.771 |
+
+A test asserts novelty's effective pull stays below audio's, so this cannot
+regress silently.
+
+> **Retuning an arm invalidates its cache.** Ranking cache keys include a hash
+> of the weight vector, not just the arm name. Keyed on the name alone, a
+> retuned arm serves rankings computed with its previous weights for the whole
+> TTL — the fix above appeared to do nothing until this was corrected.
+
+> **Play counts need refreshing.** `novelty` is derived from Jamendo's
+> `rate_listened_total`, which is a snapshot taken at ingestion. It drifts, and
+> nothing currently refreshes it on a schedule — `scripts/refresh_stats.py`
+> exists but has to be run. Note also that a multi-value Jamendo parameter
+> accepts at most **50** values, a separate and much lower limit than the
+> 200-row page limit.
+
 ### Online experimentation
 
 v1 fixed its fusion weight at `λ = 0.1`, chosen offline by asking whether same-artist pairs rank

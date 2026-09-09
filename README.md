@@ -66,6 +66,22 @@ applied as a post-hoc mask. Stage 2 does the expensive part — per-signal scori
 on those 200 only. This is the standard candidate-generation / reranking split used in production
 recommenders, and it is what makes latency independent of catalog size.
 
+### Caching
+
+Two things in the request path are expensive and highly repeatable, and both are
+memoized in Redis:
+
+| Cached | TTL | Why |
+| --- | --- | --- |
+| CLAP text-query embeddings | 24h | A transformer forward pass per query. Queries are normalized for case and whitespace first, so `"Rainy Day "` and `"rainy day"` share one entry. The model never changes, so entries survive ingestion. |
+| Ranked results per (seed/query, arm, filters) | 5m | Same inputs produce the same ranking. Invalidated wholesale when ingestion adds tracks. |
+
+Measured locally on the 150-track demo catalog: a warm ranking hit returns in
+**7ms against 176ms cold**. Track rows are always re-read from Postgres rather
+than cached with the ranking, so a metadata fix appears immediately instead of
+waiting out the TTL. Every cache path degrades to a miss on Redis failure — a
+cache that can take the API down with it is worse than no cache.
+
 ### Ranking signals
 
 Stage 2 keeps four signals separate instead of collapsing them into one number:
@@ -156,13 +172,21 @@ JAMENDO_CLIENT_ID=... docker compose up --build
 ## Tests
 
 ```bash
-cd backend  && pytest tests -q     # ranking, descriptors, bandit statistics
+docker compose up -d postgres      # the API tests need a real database
+cd backend  && pytest tests -q     # 68 tests
 cd frontend && npm run build       # typecheck + production build
 ```
 
-The backend suite covers the pure logic — signal fusion, MMR diversity and the artist cap,
-descriptor extraction against synthetic signals with known ground truth, and the Beta-posterior
-math including the small-sample case a naive rate comparison gets wrong.
+**Unit** (46) — signal fusion, MMR diversity and the artist cap, descriptor extraction against
+synthetic signals with known ground truth, cache key construction and failure degradation, and the
+Beta-posterior math including the small-sample case a naive rate comparison gets wrong.
+
+**Integration** (22) — the full API against real Postgres, with the vector store faked in-process.
+Postgres is real because the ingestion and bandit paths use `ON CONFLICT`, so testing on SQLite
+would skip the SQL most worth checking. Covered: cluster recovery, the artist cap, tag filtering,
+`_vector` never leaking into a response, vectors being requested only when the selected arm
+actually diversifies, and each event type moving the posterior the right way — including that a
+late skip is *not* counted against the arm. They skip automatically if Postgres isn't reachable.
 
 ## API
 

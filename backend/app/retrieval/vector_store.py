@@ -116,7 +116,11 @@ class VectorStore:
                 FieldCondition(key="track_id", match=MatchAny(any=exclude_track_ids))
             )
 
-        query_filter = Filter(must=must or None, must_not=must_not or None) if (must or must_not) else None
+        query_filter = (
+            Filter(must=must or None, must_not=must_not or None)
+            if (must or must_not)
+            else None
+        )
 
         hits = self.client.query_points(
             collection_name=self.collection,

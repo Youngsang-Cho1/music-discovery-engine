@@ -14,6 +14,7 @@ import asyncio
 import logging
 
 import httpx
+import numpy as np
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.config import get_settings
@@ -84,7 +85,7 @@ async def ingest(target: int, tags: str | None, order: str) -> None:
     processed = skipped = 0
 
     async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as http:
-        batch: list[tuple[JamendoTrack, "object"]] = []
+        batch: list[tuple[JamendoTrack, np.ndarray]] = []
 
         async for track in jamendo.iter_tracks(target=target, tags=tags, order=order):
             audio = await _download(http, track.audio_url)

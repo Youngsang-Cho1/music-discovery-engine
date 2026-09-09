@@ -121,14 +121,10 @@ async def _prepare(
     return track, waveform, windows
 
 
-async def ingest(target: int, tags: str | None, order: str) -> None:
+async def ingest_once(
+    target: int, tags: str | None, order: str, store: VectorStore, jamendo: JamendoClient
+) -> tuple[int, int]:
     settings = get_settings()
-    Base.metadata.create_all(bind=engine)
-
-    store = VectorStore()
-    store.ensure_collection()
-
-    jamendo = JamendoClient()
     processed = skipped = 0
 
     async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as http:
@@ -161,13 +157,56 @@ async def ingest(target: int, tags: str | None, order: str) -> None:
             processed += done
             skipped += failed
 
+    return processed, skipped
+
+
+async def sweep(
+    per_combo: int, tag_list: list[str], order_list: list[str]
+) -> None:
+    """Ingest every (tag, order) combination in one process.
+
+    Two reasons this is not a shell loop over the CLI:
+
+    * CLAP takes ~26s to load. Re-running the module per combination paid that
+      once per combination — 13 minutes of pure model loading across a 30-combo
+      sweep, which dominated the actual work.
+    * Sorting by popularity always returns the same head of the catalog no
+      matter which tag is attached. Measured: 0 new rows out of 100 once that
+      head is ingested, against ~100% new for release-date or id ordering.
+      Diversity comes from varying the sort, so the sweep is over both axes.
+    """
+    Base.metadata.create_all(bind=engine)
+
+    store = VectorStore()
+    store.ensure_collection()
+    jamendo = JamendoClient()
+
+    total_new = total_skipped = 0
+    before = store.count()
+
+    for order in order_list:
+        for tag in tag_list:
+            done, failed = await ingest_once(per_combo, tag, order, store, jamendo)
+            total_new += done
+            total_skipped += failed
+            logger.info(
+                "[%s/%s] ingested=%d skipped=%d | running total=%d vectors=%d",
+                tag,
+                order,
+                done,
+                failed,
+                total_new,
+                store.count(),
+            )
+
     # New tracks change what every ranking should return. Text-embedding cache
     # entries stay valid — the model didn't change, only the corpus.
     dropped = cache.invalidate("rank")
     logger.info(
-        "done. ingested=%d skipped=%d vectors=%d rankings_invalidated=%d",
-        processed,
-        skipped,
+        "sweep done. processed=%d skipped=%d vectors %d -> %d rankings_invalidated=%d",
+        total_new,
+        total_skipped,
+        before,
         store.count(),
         dropped,
     )
@@ -206,16 +245,29 @@ def _flush(batch, store: VectorStore, sample_rate: int) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ingest CC-licensed tracks from Jamendo")
-    parser.add_argument("--target", type=int, default=1000, help="tracks to ingest")
-    parser.add_argument("--tags", type=str, default=None, help="comma-separated fuzzy tags")
     parser.add_argument(
-        "--order",
+        "--target", type=int, default=500, help="tracks to fetch per (tag, order) combination"
+    )
+    parser.add_argument(
+        "--tags",
         type=str,
-        default="popularity_total",
-        help="jamendo sort order (popularity_total, releasedate_desc, ...)",
+        default="",
+        help="comma-separated tags, each swept separately (empty = no tag filter)",
+    )
+    parser.add_argument(
+        "--orders",
+        type=str,
+        default="releasedate_desc",
+        help=(
+            "comma-separated jamendo sort orders. popularity_total returns the same "
+            "global head for every tag; releasedate_desc / id_asc / name reach the rest."
+        ),
     )
     args = parser.parse_args()
-    asyncio.run(ingest(args.target, args.tags, args.order))
+
+    tag_list = [t.strip() for t in args.tags.split(",") if t.strip()] or [None]
+    order_list = [o.strip() for o in args.orders.split(",") if o.strip()]
+    asyncio.run(sweep(args.target, tag_list, order_list))
 
 
 if __name__ == "__main__":

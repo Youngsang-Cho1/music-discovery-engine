@@ -193,6 +193,31 @@ Loading torch into the API just to serve one endpoint is what forces an otherwis
 onto a large instance. Splitting it means the API fits a 1 GB instance, and the embedder can scale
 to zero between queries.
 
+Verified locally: the API image reports `ModuleNotFoundError: torch`, serves `/recommend/track/{id}`
+normally, and answers `/recommend/text` with `503 Text search is disabled on this deployment.`
+
+### Deploying
+
+**API** — Railway service, root directory `backend`, reads `backend/railway.json`. Add the Postgres
+and Redis plugins (Railway injects `DATABASE_URL` and `REDIS_URL`), then set:
+
+```
+QDRANT_URL=https://<cluster>.qdrant.io:6333   # Qdrant Cloud free tier
+QDRANT_API_KEY=...
+CORS_ORIGINS=https://<your-app>.vercel.app
+TEXT_ENCODER_MODE=remote                      # or `disabled` to skip the embedder entirely
+TEXT_ENCODER_URL=https://<embedder>.up.railway.app
+```
+
+**Embedder** — a second Railway service on the same repo, config path `railway.embedder.json`.
+Needs ~2 GB; the healthcheck timeout is 300s because the image warms CLAP at startup.
+
+**Ingestion** — a Railway cron job or one-off run on the embedder image:
+`python -m app.ingestion.pipeline --target 5000`.
+
+**Frontend** — Vercel, root directory `frontend`, with
+`NEXT_PUBLIC_API_URL=https://<api>.up.railway.app`.
+
 ## Tests
 
 ```bash

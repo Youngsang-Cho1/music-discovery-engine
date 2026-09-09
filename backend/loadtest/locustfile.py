@@ -11,9 +11,12 @@ Two details make the numbers mean something:
 
 * Seed ids are sampled from the live catalog at start, so every request hits a
   track that actually exists — 404s are cheap and would flatter the results.
-* `RATE_LIMIT_HEADROOM` keeps the offered load under the API's own per-IP
-  budget. Without it the run measures how fast the service can return 429,
-  which is not the question being asked.
+* Each simulated user carries its own forwarded address, so "50 users" means 50
+  clients rather than one client hammering a single per-IP budget. Otherwise
+  the run mostly measures how fast the service returns 429.
+* Text search stays a minority of the mix regardless, because it is the one
+  route whose cold path is a model forward pass — over-weighting it would
+  measure the embedder rather than the API.
 """
 import random
 
@@ -21,9 +24,10 @@ from locust import HttpUser, between, events, task
 
 SEED_TRACK_IDS: list[str] = []
 
-# The text-search budget is the tightest (20/min/IP). A load generator shares
-# one source IP, so unbounded search traffic would spend the whole run in 429s.
-RATE_LIMIT_HEADROOM = True
+# Text search is the tightest budget (20/min/IP) and the most expensive route.
+# Keeping it a small share of the task mix reflects real usage — listeners
+# browse and skip far more often than they type a new query.
+SEARCH_WEIGHT = 3
 
 QUERIES = [
     "rainy day lo-fi with soft piano",
@@ -114,7 +118,7 @@ class Listener(HttpUser):
                 self.variant = body["variant"]
                 self.last_results = [r["track"]["id"] for r in body["results"]]
 
-    @task(3 if RATE_LIMIT_HEADROOM else 10)
+    @task(SEARCH_WEIGHT)
     def text_search(self):
         """Cheap on a cache hit, a model forward pass on a miss."""
         with self.client.get(

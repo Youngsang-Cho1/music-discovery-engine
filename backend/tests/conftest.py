@@ -174,6 +174,11 @@ def schema():
         f"app engine is bound to {engine.url.database!r}, expected the test database"
     )
 
+    # Drop first: create_all adds missing *tables* but never missing columns,
+    # so a model change would otherwise leave the test database on an old
+    # schema and fail with confusing "column does not exist" errors. Safe here
+    # precisely because this is a dedicated database, guarded above.
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     return engine
 

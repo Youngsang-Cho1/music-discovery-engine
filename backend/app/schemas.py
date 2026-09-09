@@ -35,13 +35,41 @@ class RecommendationResponse(BaseModel):
 
 
 class EventIn(BaseModel):
-    session_id: str
-    variant: str
+    """One interaction with one recommended track.
+
+    `variant` must be the value echoed by the recommendation response that
+    produced this track — that is what attributes the outcome to a ranking arm.
+
+    Reward semantics: `complete` and `like` count positively. `skip` counts
+    against the arm only when `dwell_ms` is under the skip threshold — a
+    listener who skips at 2:30 heard the track and did not reject the pick.
+    """
+
+    session_id: str = Field(description="Stable per-browser id, for grouping events")
+    variant: str = Field(description="Ranking arm echoed by the recommendation response")
     track_id: str
     action: Literal["impression", "play", "skip", "complete", "like"]
     seed_track_id: str | None = None
-    position: int | None = None
-    dwell_ms: int | None = None
+    position: int | None = Field(
+        default=None, description="0-based rank in the returned list; corrects position bias"
+    )
+    dwell_ms: int | None = Field(default=None, description="Milliseconds actually listened")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "session_id": "6f1c0d2e-6a7b-4f3e-9c11-2b8a5d0e4f77",
+                    "variant": "discovery",
+                    "track_id": "1215804",
+                    "seed_track_id": "525910",
+                    "action": "complete",
+                    "position": 2,
+                    "dwell_ms": 187000,
+                }
+            ]
+        }
+    }
 
 
 class ArmStat(BaseModel):

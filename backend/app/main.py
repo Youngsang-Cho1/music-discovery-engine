@@ -46,7 +46,47 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title=settings.app_name, version="2.0.0", lifespan=lifespan)
+DESCRIPTION = """
+Search Creative-Commons music by **how it sounds**, not by how many times it
+has been played.
+
+Tracks are indexed by a CLAP embedding of their audio, so a track with three
+plays is exactly as retrievable as one with a million. Retrieval runs in two
+stages: an ANN lookup narrows the catalog to ~200 candidates, then a reranker
+fuses four signals and diversifies the result.
+
+**Every recommendation response carries the `variant` that produced it.** Echo
+that value back on the events you log — it is what lets the bandit attribute
+outcomes to ranking arms.
+
+### Notes for callers
+
+* Rate limits are per client IP: 120/min on reads, **20/min on
+  `/recommend/text`** (an uncached query costs a model forward pass), 600/min
+  on events. Exceeding one returns `429` with `Retry-After`.
+* `/recommend/text` returns **503** on deployments that run without a text
+  encoder. Every other route still works — treat it as a feature being off,
+  not as an outage.
+"""
+
+TAGS_METADATA = [
+    {"name": "recommend", "description": "Retrieval by text query or seed track."},
+    {"name": "tracks", "description": "Catalog listing, name search, and tag filtering."},
+    {"name": "catalog", "description": "Corpus-level aggregates."},
+    {
+        "name": "events",
+        "description": "Interaction logging and the live bandit report. Events are the only "
+        "ground truth the ranking is evaluated against.",
+    },
+]
+
+app = FastAPI(
+    title=settings.app_name,
+    version="2.0.0",
+    description=DESCRIPTION,
+    openapi_tags=TAGS_METADATA,
+    lifespan=lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,

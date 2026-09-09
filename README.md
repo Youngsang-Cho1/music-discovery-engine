@@ -250,6 +250,19 @@ Without a Jamendo key, `python -m scripts.seed_demo --tracks 300` fills the cata
 tracks. It exercises the wiring but the vectors carry no acoustic meaning, so text search returns
 nothing sensible against it.
 
+### Helper scripts
+
+| Script | Purpose |
+| --- | --- |
+| `scripts/seed_demo.py` | Synthetic catalog, for running without a Jamendo key |
+| `scripts/simulate_traffic.py` | Drives synthetic listeners so the bandit has outcomes to learn from — the experiments page shows four identical priors until something generates traffic |
+| `scripts/reembed.py` | Re-embeds every stored track after an embedding change |
+| `scripts/compare_representations.py` | CLAP vs. the v1 librosa vector on the same audio |
+
+`simulate_traffic.py` gives each arm a hidden true reward rate the bandit is never told, then
+reports whether the posteriors found the best one. It paces itself under the API's own rate limit
+rather than rotating addresses to slip past it.
+
 ## Deployment shape
 
 Text search is the only route that needs CLAP resident at request time — seed-track

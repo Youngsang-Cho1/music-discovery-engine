@@ -182,3 +182,51 @@ def test_mmr_stops_when_the_pool_is_exhausted():
     )
     picked = mmr_select(scored, {}, top_k=10, mmr_lambda=0.5)
     assert len(picked) == 1
+
+
+# --- weight fingerprinting ---------------------------------------------
+
+
+def test_retuning_an_arm_changes_its_cache_fingerprint():
+    """Cache keys include this. Keying on the arm's name alone served rankings
+    computed with the previous weights for the whole TTL, so a retune looked
+    like it had done nothing."""
+    before = RankingWeights(name="discovery", novelty=0.35)
+    after = RankingWeights(name="discovery", novelty=0.08)
+    assert before.fingerprint() != after.fingerprint()
+
+
+def test_identical_weights_share_a_fingerprint():
+    a = RankingWeights(name="a", audio=1.0, tag=0.2)
+    b = RankingWeights(name="b", audio=1.0, tag=0.2)
+    # Name is deliberately excluded: two arms with the same weights produce the
+    # same ranking and can share cache entries.
+    assert a.fingerprint() == b.fingerprint()
+
+
+def test_every_shipped_arm_has_a_distinct_fingerprint():
+    from app.experiments.variants import VARIANTS
+
+    prints = {name: w.fingerprint() for name, w in VARIANTS.items()}
+    assert len(set(prints.values())) == len(prints), f"arms collide: {prints}"
+
+
+def test_novelty_does_not_overwhelm_audio_similarity():
+    """Weights act on a signal's spread *within a candidate pool*, not its
+    nominal range. ANN pre-selects similar tracks so audio arrives clustered,
+    while novelty still spans nearly 0-1; at novelty=0.35 the effective pull
+    was 2.6x audio's and every result was a zero-play track regardless of fit.
+    """
+    from app.experiments.variants import VARIANTS
+
+    # Spreads measured against the live catalog.
+    audio_spread, novelty_spread = 0.127, 0.937
+    weights = VARIANTS["discovery"]
+
+    audio_pull = weights.audio * audio_spread
+    novelty_pull = weights.novelty * novelty_spread
+
+    assert novelty_pull < audio_pull, (
+        f"novelty pull {novelty_pull:.3f} exceeds audio {audio_pull:.3f} — "
+        "the arm ranks by popularity rather than by sound"
+    )

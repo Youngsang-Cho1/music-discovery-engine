@@ -21,10 +21,20 @@ VARIANTS: dict[str, RankingWeights] = {
     "diverse": RankingWeights(
         name="diverse", audio=1.0, descriptor=0.3, tag=0.2, novelty=0.0, mmr_lambda=0.6
     ),
-    # The long-tail bet: explicitly rewards low-play-count tracks. This is the
-    # arm that tests our core claim against popularity-driven baselines.
+    # The long-tail bet: rewards low-play-count tracks. This is the arm that
+    # tests our core claim against popularity-driven baselines.
+    #
+    # Novelty is weighted far below the other signals on purpose. Weights act
+    # on a signal's spread *within a candidate pool*, not its nominal 0-1
+    # range, and those differ sharply here: ANN has already selected similar
+    # tracks, so audio cosines arrive clustered (measured spread 0.127), while
+    # novelty still spans almost the whole range (0.937). At 0.35 its effective
+    # pull was 2.6x audio's and it stopped being a tie-breaker — every result
+    # was a zero-play track regardless of how well it matched. At 0.08 the
+    # pulls are comparable, so novelty breaks ties toward the long tail instead
+    # of replacing the ranking.
     "discovery": RankingWeights(
-        name="discovery", audio=1.0, descriptor=0.3, tag=0.2, novelty=0.35, mmr_lambda=0.7
+        name="discovery", audio=1.0, descriptor=0.3, tag=0.2, novelty=0.08, mmr_lambda=0.7
     ),
 }
 

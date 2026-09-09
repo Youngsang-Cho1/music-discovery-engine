@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 # Jamendo caps a single page at 200 rows.
 MAX_LIMIT = 200
 
+# ...but a multi-value parameter (e.g. `id`) is capped at 50 values, which is a
+# separate and much lower limit. Exceeding it is a hard API error, not a
+# truncated response.
+MAX_MULTI_VALUE = 50
+
 # Jamendo intermittently answers a valid query with `status: success` and zero
 # rows — measured at roughly 20-80% of requests depending on how hard we have
 # been hitting it, independent of limit and offset. Since an empty page is also
@@ -177,18 +182,25 @@ class JamendoClient:
         Metadata-only: no audio is fetched, so refreshing popularity across the
         whole catalog costs one request per 200 tracks.
         """
-        if not track_ids:
-            return {}
+        out: dict[str, dict[str, Any]] = {}
 
-        rows = await self._get(
-            "tracks",
-            {
-                "id": " ".join(track_ids),
-                "limit": MAX_LIMIT,
-                "include": "stats",
-            },
-        )
-        return {str(r["id"]): (r.get("stats") or {}) for r in rows}
+        # Chunked to MAX_MULTI_VALUE: the `id` parameter takes at most 50
+        # values regardless of the row limit.
+        for start in range(0, len(track_ids), MAX_MULTI_VALUE):
+            chunk = track_ids[start : start + MAX_MULTI_VALUE]
+            if not chunk:
+                continue
+            rows = await self._get(
+                "tracks",
+                {
+                    "id": " ".join(chunk),
+                    "limit": MAX_MULTI_VALUE,
+                    "include": "stats",
+                },
+            )
+            out.update({str(r["id"]): (r.get("stats") or {}) for r in rows})
+
+        return out
 
     async def iter_tracks(
         self,

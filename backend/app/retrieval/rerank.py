@@ -11,6 +11,8 @@ by the same artist. The weight vectors are the bandit arms (see
 `app.experiments`), so which one is right becomes an online question rather
 than a hyperparameter someone hardcoded.
 """
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,6 +32,18 @@ class RankingWeights:
     novelty: float = 0.0
     # MMR tradeoff: 1.0 = pure relevance, 0.0 = pure diversity.
     mmr_lambda: float = 0.75
+
+    def fingerprint(self) -> str:
+        """Short hash of the actual weights.
+
+        The cache key has to include this, not just `name`. Retuning an arm
+        keeps its name, so keying on the name alone serves rankings computed
+        with the previous weights for the whole TTL — the change appears to
+        have done nothing, which is exactly what happened when `discovery`
+        was rebalanced.
+        """
+        payload = json.dumps(self.as_dict(), sort_keys=True)
+        return hashlib.sha256(payload.encode()).hexdigest()[:12]
 
     def as_dict(self) -> dict[str, float]:
         return {

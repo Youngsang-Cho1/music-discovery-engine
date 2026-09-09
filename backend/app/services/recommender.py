@@ -65,6 +65,7 @@ def _ranking_cache_key(
     seed: str | None,
     query: str | None,
     variant: str,
+    weights_fingerprint: str,
     top_k: int,
     tags: list[str] | None,
     tempo_range: tuple[float, float] | None,
@@ -74,6 +75,7 @@ def _ranking_cache_key(
         seed=seed,
         query=query,
         variant=variant,
+        weights=weights_fingerprint,
         top_k=top_k,
         tags=sorted(tags) if tags else None,
         tempo=list(tempo_range) if tempo_range else None,
@@ -132,8 +134,13 @@ def recommend_by_track(
     if seed is None:
         return []
 
+    # Resolved before the cache lookup: the key includes the weight
+    # fingerprint, so a retuned arm misses the entries computed with its old
+    # weights instead of silently serving them.
+    weights = get_variant(variant)
     key = _ranking_cache_key(
-        seed=seed_track_id, query=None, variant=variant, top_k=top_k,
+        seed=seed_track_id, query=None, variant=variant,
+        weights_fingerprint=weights.fingerprint(), top_k=top_k,
         tags=tags, tempo_range=tempo_range,
     )
     cached = cache.get_json(key)
@@ -145,7 +152,6 @@ def recommend_by_track(
         logger.warning("track %s has no embedding", seed_track_id)
         return []
 
-    weights = get_variant(variant)
     candidates = store.search(
         seed_vector,
         limit=CANDIDATE_POOL,
@@ -177,15 +183,16 @@ def recommend_by_text(
 
     Raises `TextSearchUnavailable` if the deployment has no text encoder.
     """
+    weights = get_variant(variant)
     key = _ranking_cache_key(
-        seed=None, query=query.lower().strip(), variant=variant, top_k=top_k,
+        seed=None, query=query.lower().strip(), variant=variant,
+        weights_fingerprint=weights.fingerprint(), top_k=top_k,
         tags=tags, tempo_range=tempo_range,
     )
     cached = cache.get_json(key)
     if cached:
         return _hydrate(db, cached)
 
-    weights = get_variant(variant)
     query_vector = embed_query(query)
     candidates = store.search(
         query_vector,

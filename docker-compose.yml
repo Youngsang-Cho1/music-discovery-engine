@@ -37,6 +37,11 @@ services:
         condition: service_started
       redis:
         condition: service_started
+      # Started, not healthy: the API must come up even if the embedder is
+      # still warming CLAP. Text search returns 503 until it is ready; every
+      # other route works immediately.
+      embedder:
+        condition: service_started
     environment:
       DATABASE_URL: postgresql+psycopg://mde:mde@postgres:5432/mde
       QDRANT_URL: http://qdrant:6333
@@ -61,6 +66,14 @@ services:
       JAMENDO_CLIENT_ID: ${JAMENDO_CLIENT_ID:-}
     ports:
       - "8100:8100"
+    healthcheck:
+      # Only reports healthy once CLAP has finished loading — the endpoint is
+      # served after the lifespan warm-up completes.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8100/healthz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
     volumes:
       # Weights are baked into the image; this keeps any additional downloads
       # across restarts.

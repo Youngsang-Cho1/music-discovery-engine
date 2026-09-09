@@ -30,8 +30,16 @@ class Settings(BaseSettings):
     # --- CLAP embedding model ---
     clap_model_id: str = "laion/larger_clap_music_and_speech"
     clap_sample_rate: int = 48_000
-    # Seconds of audio fed to CLAP per track. The model was trained on 10s windows.
+    # CLAP's feature extractor is hard-capped at 480,000 samples — exactly 10s
+    # at 48kHz — and its default truncation picks a *random* window. This is
+    # not a tunable: it is the model's input size.
     clap_window_seconds: int = 10
+    # Number of windows sampled across the track and mean-pooled into one
+    # vector. Measured on real tracks, two windows of the same song can be
+    # nearly orthogonal (cosine ~0.0), which is the same magnitude as the gap
+    # between genuinely different tracks — one window is a high-variance
+    # sample of the song, not a description of it.
+    clap_windows_per_track: int = 3
     embedding_dim: int = 512
 
     # How the API turns a text query into a vector.

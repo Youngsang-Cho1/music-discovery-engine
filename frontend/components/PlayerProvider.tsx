@@ -36,6 +36,8 @@ interface PlayerState {
   next: () => void;
   seek: (seconds: number) => void;
   like: () => void;
+  /** Whether the current track has already been liked this play. */
+  liked: boolean;
 }
 
 const PlayerContext = createContext<PlayerState | null>(null);
@@ -52,6 +54,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [liked, setLiked] = useState(false);
 
   // Playback bookkeeping lives in refs, not state: it is read inside event
   // handlers that must not re-subscribe on every render.
@@ -59,6 +62,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const startedAtRef = useRef<number>(0);
   const listenedMsRef = useRef<number>(0);
   const resolvedRef = useRef<boolean>(false);
+  const likedRef = useRef<boolean>(false);
   const queueRef = useRef<QueueItem[]>([]);
 
   // Mirror `current` into a ref so unload/ended handlers can read the live
@@ -124,9 +128,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       startedAtRef.current = Date.now();
       listenedMsRef.current = 0;
       resolvedRef.current = false;
+      likedRef.current = false;
 
       setCurrent(track);
       setProgress(0);
+      setLiked(false);
 
       const audio = audioRef.current;
       if (audio) {
@@ -168,7 +174,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const like = useCallback(() => {
     const track = currentRef.current;
     const context = contextRef.current;
-    if (!track || !context) return;
+    // One like per play — a second click would count twice toward the arm's
+    // reward total and quietly bias the experiment.
+    if (!track || !context || likedRef.current) return;
+
+    likedRef.current = true;
+    setLiked(true);
     const dwell = listenedMsRef.current + (Date.now() - startedAtRef.current);
     emit("like", track, context, Math.max(0, Math.round(dwell)));
   }, [emit]);
@@ -214,8 +225,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, [resolveCurrent]);
 
   const value = useMemo(
-    () => ({ current, isPlaying, progress, duration, play, toggle, next, seek, like }),
-    [current, isPlaying, progress, duration, play, toggle, next, seek, like],
+    () => ({ current, isPlaying, progress, duration, play, toggle, next, seek, like, liked }),
+    [current, isPlaying, progress, duration, play, toggle, next, seek, like, liked],
   );
 
   return (

@@ -91,33 +91,93 @@ def _as_vectors(output) -> np.ndarray:
     return _l2_normalize(tensor.cpu().numpy().astype(np.float32))
 
 
-def load_waveform(audio_bytes: bytes, *, seconds: int | None = None) -> np.ndarray:
-    """Decode audio bytes to a mono waveform at CLAP's sample rate.
+def decode(audio_bytes: bytes) -> np.ndarray:
+    """Decode audio bytes to a full mono waveform at CLAP's sample rate.
 
-    Takes the middle window rather than the head: intros are frequently silence
-    or a fade-in and are the least representative part of a track.
-
-    The window is measured against what actually decodes, not against the
-    container's declared duration. Ingestion fetches a byte range rather than
-    whole files, so the mp3 header still advertises the full track — trusting
-    it puts the offset past the end of the data we hold and yields an empty
-    array, which then embeds as a meaningless vector rather than failing.
+    Decodes whatever is actually present rather than trusting the container
+    header. Ingestion fetches a byte range, so an mp3's header still advertises
+    the full track length; seeking by it lands past the end of the data we hold
+    and yields an empty array, which then embeds into a meaningless vector
+    instead of failing.
     """
     import librosa
 
+    waveform, _ = librosa.load(
+        io.BytesIO(audio_bytes), sr=get_settings().clap_sample_rate, mono=True
+    )
+    return waveform
+
+
+def window_offsets(total_samples: int, window: int, count: int) -> list[int]:
+    """Evenly spaced window start offsets covering the decoded audio."""
+    if total_samples <= window:
+        return [0]
+    if count <= 1:
+        return [(total_samples - window) // 2]
+    span = total_samples - window
+    return [int(round(i * span / (count - 1))) for i in range(count)]
+
+
+def load_windows(
+    audio_bytes: bytes, *, count: int | None = None, seconds: int | None = None
+) -> list[np.ndarray]:
+    """Decode and slice a track into the windows that will be embedded.
+
+    One window is not a description of a song. Measured across real tracks,
+    two 10s windows of the *same* track score as low as ~0.0 cosine against
+    each other — the same magnitude as the gap between unrelated tracks. Which
+    section happens to be sampled would then decide what the track "sounds
+    like", so several windows are taken and pooled instead.
+    """
+    settings = get_settings()
+    seconds = seconds or settings.clap_window_seconds
+    count = count or settings.clap_windows_per_track
+
+    waveform = decode(audio_bytes)
+    window = int(seconds * settings.clap_sample_rate)
+
+    if waveform.size == 0:
+        return []
+    if waveform.size <= window:
+        return [waveform]
+
+    return [waveform[o : o + window] for o in window_offsets(waveform.size, window, count)]
+
+
+def load_waveform(audio_bytes: bytes, *, seconds: int | None = None) -> np.ndarray:
+    """Single middle window. Retained for callers that want one representative
+    slice (descriptor extraction) rather than the pooled set."""
     settings = get_settings()
     seconds = seconds or settings.clap_window_seconds
 
-    waveform, sample_rate = librosa.load(
-        io.BytesIO(audio_bytes), sr=settings.clap_sample_rate, mono=True
-    )
-
-    window = int(seconds * sample_rate)
+    waveform = decode(audio_bytes)
+    window = int(seconds * settings.clap_sample_rate)
     if waveform.size <= window:
         return waveform
 
     start = (waveform.size - window) // 2
     return waveform[start : start + window]
+
+
+def embed_track(windows: list[np.ndarray]) -> np.ndarray:
+    """Mean-pool per-window embeddings into one L2-normalized track vector.
+
+    Mean rather than max: the windows are alternative views of one track, and
+    averaging unit vectors moves the result toward whatever they agree on while
+    the parts they disagree about cancel. Max would just pick one window back
+    out and reintroduce the variance this exists to remove.
+    """
+    if not windows:
+        raise ValueError("no windows to embed")
+
+    per_window = embed_audio(windows)
+    pooled = per_window.mean(axis=0)
+    norm = float(np.linalg.norm(pooled))
+    if norm == 0:
+        # Windows cancelled exactly; fall back to a single one rather than
+        # emitting a zero vector that would match everything equally.
+        return per_window[0]
+    return (pooled / norm).astype(np.float32)
 
 
 def embed_audio(waveforms: list[np.ndarray]) -> np.ndarray:

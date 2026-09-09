@@ -20,7 +20,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app import cache
 from app.config import get_settings
 from app.db import Base, SessionLocal, engine
-from app.embeddings.clap import embed_audio, load_waveform
+from app.embeddings.clap import embed_track, load_windows
 from app.embeddings.descriptors import compute_descriptors
 from app.ingestion.jamendo import JamendoClient, JamendoTrack
 from app.models import Track
@@ -29,9 +29,14 @@ from app.retrieval.vector_store import VectorStore
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("ingest")
 
-# CLAP only consumes a 10s window, so there is no reason to pull a whole 5MB
-# track. Most CDNs honour Range; if this one doesn't we just get the full body.
-PREVIEW_BYTES = 2_000_000
+# Enough bytes for the sampled windows to span a real portion of the track.
+# 2MB decoded to ~70-125s, which put every window inside the first two minutes;
+# windows that never reach the second half describe an intro, not a song.
+# Most CDNs honour Range; if this one doesn't we just get the full body.
+PREVIEW_BYTES = 6_000_000
+# Also the download concurrency: a batch is fetched in parallel, then embedded
+# in one CLAP call. Larger batches hide more network latency but hold more
+# decoded audio in memory at once.
 BATCH_SIZE = 16
 
 # Shortest decode we will embed. Below a few seconds the CLAP vector describes
@@ -80,6 +85,42 @@ def _upsert_track(db, track: JamendoTrack, features: dict) -> None:
     db.execute(stmt)
 
 
+async def _prepare(
+    http: httpx.AsyncClient, track: JamendoTrack, sample_rate: int
+) -> tuple[JamendoTrack, np.ndarray, list[np.ndarray]] | None:
+    """Download and decode one track. None means skip it."""
+    audio = await _download(http, track.audio_url)
+    if not audio:
+        return None
+
+    try:
+        # librosa decoding is CPU-bound and releases the GIL poorly; run it off
+        # the event loop so it doesn't stall the concurrent downloads.
+        windows = await asyncio.to_thread(load_windows, audio)
+    except Exception as exc:
+        logger.warning("decode failed %s: %s", track.id, exc)
+        return None
+
+    if not windows:
+        logger.warning("decoded nothing for %s, skipping", track.id)
+        return None
+
+    # Descriptors read the middle window: they describe absolute properties
+    # (tempo, loudness) where averaging across sections would smear a tempo
+    # change into a value the track never has.
+    waveform = windows[len(windows) // 2]
+
+    # A too-short decode still embeds without raising, and the resulting vector
+    # is indistinguishable from a real one once it is in the index.
+    if waveform.size < MIN_SAMPLES:
+        logger.warning(
+            "decoded only %.1fs for %s, skipping", waveform.size / sample_rate, track.id
+        )
+        return None
+
+    return track, waveform, windows
+
+
 async def ingest(target: int, tags: str | None, order: str) -> None:
     settings = get_settings()
     Base.metadata.create_all(bind=engine)
@@ -91,41 +132,34 @@ async def ingest(target: int, tags: str | None, order: str) -> None:
     processed = skipped = 0
 
     async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as http:
-        batch: list[tuple[JamendoTrack, np.ndarray]] = []
+        pending: list[JamendoTrack] = []
+
+        async def drain() -> tuple[int, int]:
+            """Fetch a batch concurrently, then embed it in one CLAP call."""
+            # Downloads dominated wall time when done one at a time — each track
+            # is a few MB over the network while the CPU sits idle.
+            results = await asyncio.gather(
+                *(_prepare(http, t, settings.clap_sample_rate) for t in pending)
+            )
+            ready = [r for r in results if r is not None]
+            failed = len(results) - len(ready)
+            if not ready:
+                return 0, failed
+            return _flush(ready, store, settings.clap_sample_rate), failed
 
         async for track in jamendo.iter_tracks(target=target, tags=tags, order=order):
-            audio = await _download(http, track.audio_url)
-            if not audio:
-                skipped += 1
-                continue
-            try:
-                waveform = load_waveform(audio)
-            except Exception as exc:
-                logger.warning("decode failed %s: %s", track.id, exc)
-                skipped += 1
-                continue
-
-            # A too-short decode still embeds without raising, and the
-            # resulting vector is indistinguishable from a real one once it is
-            # in the index. Reject it here instead.
-            if waveform.size < MIN_SAMPLES:
-                logger.warning(
-                    "decoded only %.1fs for %s, skipping",
-                    waveform.size / settings.clap_sample_rate,
-                    track.id,
-                )
-                skipped += 1
-                continue
-
-            batch.append((track, waveform))
-
-            if len(batch) >= BATCH_SIZE:
-                processed += _flush(batch, store, settings.clap_sample_rate)
-                batch = []
+            pending.append(track)
+            if len(pending) >= BATCH_SIZE:
+                done, failed = await drain()
+                processed += done
+                skipped += failed
+                pending = []
                 logger.info("ingested=%d skipped=%d", processed, skipped)
 
-        if batch:
-            processed += _flush(batch, store, settings.clap_sample_rate)
+        if pending:
+            done, failed = await drain()
+            processed += done
+            skipped += failed
 
     # New tracks change what every ranking should return. Text-embedding cache
     # entries stay valid — the model didn't change, only the corpus.
@@ -141,10 +175,11 @@ async def ingest(target: int, tags: str | None, order: str) -> None:
 
 def _flush(batch, store: VectorStore, sample_rate: int) -> int:
     """Embed one batch and write it to both stores."""
-    tracks = [t for t, _ in batch]
-    waveforms = [w for _, w in batch]
+    tracks = [t for t, _, _ in batch]
+    waveforms = [w for _, w, _ in batch]
 
-    vectors = embed_audio(waveforms)
+    # Pooled per track: each track's windows are embedded together and averaged.
+    vectors = [embed_track(windows) for _, _, windows in batch]
 
     records = []
     with SessionLocal() as db:

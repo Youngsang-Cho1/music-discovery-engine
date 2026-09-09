@@ -186,9 +186,21 @@ async def sweep(
     total_new = total_skipped = 0
     before = store.count()
 
+    combos_failed = 0
+
     for order in order_list:
         for tag in tag_list:
-            done, failed = await ingest_once(per_combo, tag, order, store, jamendo)
+            # A sweep is a long sequence of independent units of work. Letting
+            # one propagate loses every combination after it — a single
+            # transient DNS failure once cost 13 of 14 genres. Each combination
+            # is isolated so the run degrades instead of aborting.
+            try:
+                done, failed = await ingest_once(per_combo, tag, order, store, jamendo)
+            except Exception:
+                combos_failed += 1
+                logger.exception("[%s/%s] failed, continuing with the next combination", tag, order)
+                continue
+
             total_new += done
             total_skipped += failed
             logger.info(
@@ -205,9 +217,11 @@ async def sweep(
     # entries stay valid — the model didn't change, only the corpus.
     dropped = cache.invalidate("rank")
     logger.info(
-        "sweep done. processed=%d skipped=%d vectors %d -> %d rankings_invalidated=%d",
+        "sweep done. processed=%d skipped=%d combos_failed=%d vectors %d -> %d "
+        "rankings_invalidated=%d",
         total_new,
         total_skipped,
+        combos_failed,
         before,
         store.count(),
         dropped,

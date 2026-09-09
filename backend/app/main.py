@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import routes_events, routes_recommend, routes_tracks
+from app.api import routes_catalog, routes_events, routes_recommend, routes_tracks
 from app.api.deps import get_store
 from app.config import get_settings
 from app.db import Base, SessionLocal, engine
@@ -56,6 +56,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(routes_catalog.router)
 app.include_router(routes_tracks.router)
 app.include_router(routes_recommend.router)
 app.include_router(routes_events.router)

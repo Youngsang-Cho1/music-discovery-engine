@@ -32,10 +32,16 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <PlayerProvider>
           <header className="border-b border-white/10">
             <nav className="mx-auto flex max-w-5xl items-center gap-6 px-4 py-4">
-              <Link href="/" className="text-sm font-semibold tracking-tight">
+              <Link href="/" className="mr-2 text-sm font-semibold tracking-tight">
                 ◍ Music Discovery Engine
               </Link>
-              <Link href="/experiments" className="text-xs text-white/50 hover:text-white">
+              <Link href="/browse" className="text-xs text-white/50 transition hover:text-white">
+                Browse
+              </Link>
+              <Link
+                href="/experiments"
+                className="text-xs text-white/50 transition hover:text-white"
+              >
                 Experiments
               </Link>
             </nav>

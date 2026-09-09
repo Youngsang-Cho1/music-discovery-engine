@@ -1,5 +1,6 @@
 import { getSessionId } from "./session";
 import type {
+  CatalogStats,
   EventPayload,
   ExperimentReport,
   RecommendationResponse,
@@ -99,6 +100,10 @@ export function recommendByText(
   const params = filterParams(filters);
   params.set("q", query);
   return request<RecommendationResponse>(`/recommend/text?${params}`);
+}
+
+export function getCatalogStats(): Promise<CatalogStats> {
+  return request<CatalogStats>("/catalog/stats");
 }
 
 export function getExperimentReport(): Promise<ExperimentReport> {

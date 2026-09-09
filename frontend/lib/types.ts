@@ -62,3 +62,15 @@ export interface ExperimentReport {
   total_impressions: number;
   total_rewards: number;
 }
+
+export interface TagCount {
+  tag: string;
+  count: number;
+}
+
+export interface CatalogStats {
+  tracks: number;
+  artists: number;
+  total_duration_sec: number;
+  top_tags: TagCount[];
+}

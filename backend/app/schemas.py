@@ -58,3 +58,15 @@ class ExperimentReport(BaseModel):
     arms: list[ArmStat]
     total_impressions: int
     total_rewards: int
+
+
+class TagCount(BaseModel):
+    tag: str
+    count: int
+
+
+class CatalogStats(BaseModel):
+    tracks: int
+    artists: int
+    total_duration_sec: int
+    top_tags: list[TagCount] = Field(default_factory=list)

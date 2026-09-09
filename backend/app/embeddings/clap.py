@@ -12,7 +12,7 @@ and free natural-language search ("rainy day lo-fi") against the same index.
 """
 import io
 import logging
-from functools import lru_cache
+import threading
 
 import numpy as np
 
@@ -21,25 +21,58 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 
-@lru_cache(maxsize=1)
-def _load_model():
-    """Lazily load CLAP. Import torch/transformers here so that API processes
-    that never embed anything don't pay the import cost."""
-    import torch
-    from transformers import ClapModel, ClapProcessor
+_model_bundle: tuple | None = None
+_model_lock = threading.Lock()
 
-    settings = get_settings()
-    device = (
-        "cuda"
-        if torch.cuda.is_available()
-        else "mps"
-        if torch.backends.mps.is_available()
-        else "cpu"
-    )
-    logger.info("loading CLAP %s on %s", settings.clap_model_id, device)
-    model = ClapModel.from_pretrained(settings.clap_model_id).to(device).eval()
-    processor = ClapProcessor.from_pretrained(settings.clap_model_id)
-    return model, processor, device
+
+def _load_model():
+    """Lazily load CLAP, exactly once per process.
+
+    `lru_cache` is not sufficient here. It memoizes the *result* but holds no
+    lock while the function runs, so concurrent callers all miss and all start
+    loading. FastAPI runs sync handlers in a threadpool, so a burst of cold
+    text-search requests each allocated its own ~1.5GB model and the process
+    was OOM-killed — found by the load test, not by any unit test.
+
+    Double-checked locking: the fast path stays lock-free once loaded.
+    """
+    global _model_bundle
+
+    if _model_bundle is not None:
+        return _model_bundle
+
+    with _model_lock:
+        # Re-check: another thread may have loaded it while we waited.
+        if _model_bundle is not None:
+            return _model_bundle
+
+        # Imported here so API processes that never embed skip the cost.
+        import torch
+        from transformers import ClapModel, ClapProcessor
+
+        settings = get_settings()
+        device = (
+            "cuda"
+            if torch.cuda.is_available()
+            else "mps"
+            if torch.backends.mps.is_available()
+            else "cpu"
+        )
+        logger.info("loading CLAP %s on %s", settings.clap_model_id, device)
+        model = ClapModel.from_pretrained(settings.clap_model_id).to(device).eval()
+        processor = ClapProcessor.from_pretrained(settings.clap_model_id)
+        _model_bundle = (model, processor, device)
+
+    return _model_bundle
+
+
+def warm_up() -> None:
+    """Load the model ahead of serving traffic.
+
+    Without this the first request pays a ~13s load, and everything queued
+    behind it waits on the same lock.
+    """
+    _load_model()
 
 
 def _l2_normalize(x: np.ndarray) -> np.ndarray:

@@ -31,6 +31,18 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # Qdrant down shouldn't block catalog endpoints
         logger.warning("qdrant unavailable at startup: %s", exc)
 
+    # Load CLAP before accepting traffic when it runs in-process. Deferring it
+    # to the first request means that request waits ~13s and every concurrent
+    # one queues behind the same lock.
+    if settings.text_encoder_mode == "local":
+        try:
+            from app.embeddings.clap import warm_up
+
+            logger.info("warming CLAP (TEXT_ENCODER_MODE=local)")
+            warm_up()
+        except Exception as exc:
+            logger.warning("CLAP warm-up failed, text search will load on demand: %s", exc)
+
     yield
 
 

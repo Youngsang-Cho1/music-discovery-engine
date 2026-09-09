@@ -76,11 +76,11 @@ memoized in Redis:
 | CLAP text-query embeddings | 24h | A transformer forward pass per query. Queries are normalized for case and whitespace first, so `"Rainy Day "` and `"rainy day"` share one entry. The model never changes, so entries survive ingestion. |
 | Ranked results per (seed/query, arm, filters) | 5m | Same inputs produce the same ranking. Invalidated wholesale when ingestion adds tracks. |
 
-Measured locally on the 150-track demo catalog: a warm ranking hit returns in
-**7ms against 176ms cold**. Track rows are always re-read from Postgres rather
-than cached with the ranking, so a metadata fix appears immediately instead of
-waiting out the TTL. Every cache path degrades to a miss on Redis failure — a
-cache that can take the API down with it is worse than no cache.
+Measured on the 798-track catalog, `diverse` arm (MMR active), three cold/warm pairs:
+**7–11 ms warm against 76–128 ms cold**, roughly a 10× reduction. Track rows are always re-read
+from Postgres rather than cached with the ranking, so a metadata fix appears immediately instead
+of waiting out the TTL. Every cache path degrades to a miss on Redis failure — a cache that can
+take the API down with it is worse than no cache.
 
 ### Ranking signals
 
@@ -201,6 +201,34 @@ The API image is **8× smaller**. Verified end-to-end against both built images:
 * `TEXT_ENCODER_MODE=remote` → the torch-free API answers a text query correctly by calling the
   embedder container, returning L2-normalized 512-d vectors from `POST /embed`.
 
+### Load testing
+
+`backend/loadtest/locustfile.py` models a listener session — browsing, opening similar-track pages,
+occasional text queries, and a steady stream of impression/skip/complete events. Each simulated
+user carries a distinct forwarded address, so the run measures service capacity rather than how
+fast the rate limiter can return 429.
+
+50 concurrent users, 60s, against a 798-track catalog. Single uvicorn process on a laptop that is
+simultaneously running Postgres, Qdrant and Redis in Docker — so these are a floor, not a ceiling:
+
+| Endpoint | p50 | p95 | p99 |
+| --- | --- | --- | --- |
+| `/recommend/track/{id}` | 84 ms | 270 ms | 1600 ms |
+| `/recommend/text` | 15 ms | 110 ms | 1200 ms |
+| `POST /events` | 15 ms | 90 ms | 1400 ms |
+| **Aggregate** (2132 reqs, 35.6 req/s) | **19 ms** | **200 ms** | 1400 ms |
+
+**0 failures.**
+
+**The first run did not look like this.** It produced 773 `ConnectionRefused` errors because the
+process died partway through, and the load test is the only thing that found out why: `_load_model`
+was memoized with `@lru_cache`, which caches the *result* but holds no lock while the function
+runs. FastAPI serves sync handlers from a threadpool, so a burst of cold text-search requests all
+missed the cache and each began loading its own ~1.5GB copy of CLAP. Reproduced in isolation: 32
+concurrent callers construct the model **32 times**. It is now double-checked locking plus a
+startup warm-up, with a regression test that fails if concurrent callers ever load it more than
+once.
+
 ### Rate limiting
 
 Sliding-window counters in Redis, per client IP, with per-route budgets — a seed-track
@@ -243,11 +271,11 @@ Needs ~2 GB; the healthcheck timeout is 300s because the image warms CLAP at sta
 
 ```bash
 docker compose up -d postgres      # the API tests need a real database
-cd backend  && pytest tests -q     # 96 tests
+cd backend  && pytest tests -q     # 100 tests
 cd frontend && npm run build       # typecheck + production build
 ```
 
-**Unit** (74) — signal fusion, MMR diversity and the artist cap, descriptor extraction against
+**Unit** (78) — signal fusion, MMR diversity and the artist cap, descriptor extraction against
 synthetic signals with known ground truth, cache key construction and failure degradation, the
 Jamendo client's empty-page retry, waveform decoding from truncated downloads, and the
 Beta-posterior math including the small-sample case a naive rate comparison gets wrong.

@@ -37,18 +37,40 @@ QUERIES = [
 
 @events.test_start.add_listener
 def _load_seed_ids(environment, **_kwargs):
-    """Pull real track ids once, before the run starts."""
+    """Pull real track ids once, before the run starts.
+
+    Sends its own forwarded address so setup doesn't spend the budget the
+    simulated users need — and so a previous run's leftover budget can't leave
+    this one with an empty seed list and no similar-track traffic at all.
+    """
+    import time
+
     import httpx
 
-    try:
-        resp = httpx.get(f"{environment.host}/tracks?limit=200", timeout=30)
-        resp.raise_for_status()
-        SEED_TRACK_IDS.extend(t["id"] for t in resp.json())
-    except Exception as exc:
-        raise RuntimeError(f"could not load seed track ids from {environment.host}: {exc}") from exc
+    headers = {"X-Forwarded-For": "10.255.255.254"}
+    last_error = None
+
+    for attempt in range(5):
+        try:
+            resp = httpx.get(
+                f"{environment.host}/tracks?limit=200", headers=headers, timeout=30
+            )
+            if resp.status_code == 429:
+                last_error = "rate limited"
+                time.sleep(2 * (attempt + 1))
+                continue
+            resp.raise_for_status()
+            SEED_TRACK_IDS.extend(t["id"] for t in resp.json())
+            break
+        except Exception as exc:
+            last_error = exc
+            time.sleep(1)
 
     if not SEED_TRACK_IDS:
-        raise RuntimeError("catalog is empty — ingest tracks before load testing")
+        raise RuntimeError(
+            f"could not load seed track ids from {environment.host}: {last_error}. "
+            "Is the catalog populated?"
+        )
     print(f"loaded {len(SEED_TRACK_IDS)} seed track ids")
 
 
@@ -60,9 +82,20 @@ class Listener(HttpUser):
         self.last_results = []
         self.variant = "control"
 
+        # Rate limiting is per client IP, but a load generator has one. Giving
+        # each simulated user a distinct forwarded address models N separate
+        # listeners; without it the run mostly measures how fast the service
+        # returns 429, which is a different question.
+        octets = ".".join(str(random.randint(1, 254)) for _ in range(3))
+        self.client.headers["X-Forwarded-For"] = f"10.{octets}"
+
     @task(10)
     def browse(self):
-        self.client.get("/tracks/random?limit=12", name="/tracks/random")
+        with self.client.get(
+            "/tracks/random?limit=12", name="/tracks/random", catch_response=True
+        ) as resp:
+            if resp.status_code == 429:
+                resp.success()
 
     @task(20)
     def similar_tracks(self):

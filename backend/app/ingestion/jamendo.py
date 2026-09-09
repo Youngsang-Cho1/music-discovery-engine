@@ -6,6 +6,7 @@ the playback path in the deployed service are licensed — unlike scraping
 YouTube audio, which violates its Terms of Service and has no redistribution
 right attached.
 """
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -17,10 +18,16 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# Jamendo documents a 200-row cap, but `limit=200` returns an empty result set
-# with `status: success` — no error, just zero rows, at every offset. 199 works.
-# Requesting the documented maximum therefore ingests nothing, silently.
-MAX_LIMIT = 199
+# Jamendo caps a single page at 200 rows.
+MAX_LIMIT = 200
+
+# Jamendo intermittently answers a valid query with `status: success` and zero
+# rows — measured at roughly 20-80% of requests depending on how hard we have
+# been hitting it, independent of limit and offset. Since an empty page is also
+# the legitimate end-of-catalog signal, the two are indistinguishable from one
+# response; only a repeat request tells them apart.
+EMPTY_PAGE_RETRIES = 4
+EMPTY_PAGE_BACKOFF = 2.0
 
 
 @dataclass(slots=True)
@@ -134,11 +141,26 @@ class JamendoClient:
         if tags:
             params["fuzzytags"] = tags
 
-        rows = await self._get("tracks", params)
+        # Re-ask on an empty page before believing it. Without this the very
+        # first page can come back empty and the whole ingestion exits having
+        # done nothing, reporting success.
+        rows: list[dict[str, Any]] = []
+        for attempt in range(EMPTY_PAGE_RETRIES):
+            rows = await self._get("tracks", params)
+            if rows:
+                break
+            if attempt < EMPTY_PAGE_RETRIES - 1:
+                logger.warning(
+                    "empty page at offset=%s (attempt %d/%d), retrying",
+                    offset,
+                    attempt + 1,
+                    EMPTY_PAGE_RETRIES,
+                )
+                await asyncio.sleep(EMPTY_PAGE_BACKOFF * (attempt + 1))
+
         if not rows:
-            logger.warning(
-                "jamendo returned 0 rows for limit=%s offset=%s", params["limit"], offset
-            )
+            logger.info("offset=%s empty after %d attempts", offset, EMPTY_PAGE_RETRIES)
+
         tracks = [JamendoTrack.from_api(r) for r in rows]
         return [t for t in tracks if t.audio_url]
 

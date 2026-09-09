@@ -1,3 +1,10 @@
+# API service only — deliberately no torch/librosa.
+#
+# Only text search needs the model at request time; seed-track recommendation
+# reads vectors computed during ingestion. Keeping ML out of this file is what
+# lets the API run on a small instance (the torch + CLAP working set is ~2.5GB).
+# Ingestion and the embedder service install requirements-ml.txt on top.
+#
 # Pinned to the versions the stack was verified against locally.
 fastapi==0.115.6
 uvicorn[standard]==0.52.4
@@ -13,12 +20,7 @@ scipy==1.18.1
 tenacity==9.1.4
 python-dotenv==1.0.1
 
-# Audio decoding + embeddings
-librosa==1.0.0
-soundfile==0.14.0
-torch==2.14.0
-transformers==5.16.1
-
 # Dev / test
 pytest==9.1.1
+pytest-asyncio==1.4.0
 ruff==0.16.6

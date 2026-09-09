@@ -1,42 +1,46 @@
-# Virtual Environment
+# Python
 .venv/
 venv/
 env/
-
-# Python cache
 __pycache__/
 *.py[cod]
-*$py.class
+.pytest_cache/
+.ruff_cache/
 
-# OS & IDE settings
+# Node / Next.js
+node_modules/
+.next/
+out/
+.turbo/
+next-env.d.ts
+
+# Env & secrets
+.env
+.env.local
+*.env.local
+
+# OS & IDE
 .DS_Store
 .vscode/
 .idea/
-.env
+.claude/
+.streamlit/
 
-# Large Media & Temp Files (Keep Git small)
+# Model weights & caches
+*.pt
+*.ckpt
+hf_cache/
+
+# Logs & scratch
+*.log
+*.jsonl
+scratch/
+
+# v1 artifacts: audio we no longer download, plus large intermediates
+legacy/data/audio_files/
+legacy/data/playback_cache/
 data/audio_files/
 data/playback_cache/
 data/audio/
-scratch/
-tests/
-
-# Keep only the essential master data for portability (~10MB)
-!data/dataset/master_music_data.parquet
-!data/dataset/processed_songs.csv
-!data/embeddings/audio_features.parquet
-
-# Exclude all logs and intermediate manifests
-*.jsonl
-*.log
 download_manifest.csv
 download_failures.csv
-
-# Keep documentation clean
-.claude/
-.streamlit/
-PRESENTATION.md
-PROPOSAL.md
-DESIGN_DOC.md
-PIPELINE_EXPLAINED.md
-

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_store
 from app.db import get_db
+from app.embeddings.text_encoder import TextSearchUnavailable
 from app.experiments import bandit
 from app.models import Track
 from app.retrieval.vector_store import VectorStore
@@ -89,15 +90,20 @@ def recommend_from_text(
     session_id = session_id or str(uuid.uuid4())
     variant = bandit.choose_variant(db, forced=force_variant)
 
-    recs = recommender.recommend_by_text(
-        db,
-        store,
-        query=q,
-        variant=variant,
-        top_k=top_k,
-        tags=tags,
-        tempo_range=_parse_tempo(tempo_min, tempo_max),
-    )
+    try:
+        recs = recommender.recommend_by_text(
+            db,
+            store,
+            query=q,
+            variant=variant,
+            top_k=top_k,
+            tags=tags,
+            tempo_range=_parse_tempo(tempo_min, tempo_max),
+        )
+    except TextSearchUnavailable as exc:
+        # 503, not 500: the rest of the API is healthy and seed-track
+        # recommendations still work.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     bandit.record_impression(db, variant, count=len(recs))
     return RecommendationResponse(
         variant=variant,

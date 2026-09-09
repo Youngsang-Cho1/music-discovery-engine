@@ -59,27 +59,32 @@ def _as_vectors(output) -> np.ndarray:
 
 
 def load_waveform(audio_bytes: bytes, *, seconds: int | None = None) -> np.ndarray:
-    """Decode arbitrary audio bytes to a mono waveform at CLAP's sample rate.
+    """Decode audio bytes to a mono waveform at CLAP's sample rate.
 
-    Reads the middle window rather than the head: intros are frequently silence
+    Takes the middle window rather than the head: intros are frequently silence
     or a fade-in and are the least representative part of a track.
+
+    The window is measured against what actually decodes, not against the
+    container's declared duration. Ingestion fetches a byte range rather than
+    whole files, so the mp3 header still advertises the full track — trusting
+    it puts the offset past the end of the data we hold and yields an empty
+    array, which then embeds as a meaningless vector rather than failing.
     """
     import librosa
 
     settings = get_settings()
     seconds = seconds or settings.clap_window_seconds
 
-    duration = librosa.get_duration(path=io.BytesIO(audio_bytes))
-    offset = max(0.0, (duration - seconds) / 2)
-
-    waveform, _ = librosa.load(
-        io.BytesIO(audio_bytes),
-        sr=settings.clap_sample_rate,
-        mono=True,
-        offset=offset,
-        duration=seconds,
+    waveform, sample_rate = librosa.load(
+        io.BytesIO(audio_bytes), sr=settings.clap_sample_rate, mono=True
     )
-    return waveform
+
+    window = int(seconds * sample_rate)
+    if waveform.size <= window:
+        return waveform
+
+    start = (waveform.size - window) // 2
+    return waveform[start : start + window]
 
 
 def embed_audio(waveforms: list[np.ndarray]) -> np.ndarray:

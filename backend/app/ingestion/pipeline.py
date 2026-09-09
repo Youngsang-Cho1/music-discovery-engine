@@ -34,6 +34,11 @@ logger = logging.getLogger("ingest")
 PREVIEW_BYTES = 2_000_000
 BATCH_SIZE = 16
 
+# Shortest decode we will embed. Below a few seconds the CLAP vector describes
+# a fragment rather than the track, and beat tracking has nothing to work with.
+MIN_SECONDS = 3.0
+MIN_SAMPLES = int(MIN_SECONDS * 48_000)
+
 
 async def _download(client: httpx.AsyncClient, url: str) -> bytes | None:
     try:
@@ -97,6 +102,18 @@ async def ingest(target: int, tags: str | None, order: str) -> None:
                 waveform = load_waveform(audio)
             except Exception as exc:
                 logger.warning("decode failed %s: %s", track.id, exc)
+                skipped += 1
+                continue
+
+            # A too-short decode still embeds without raising, and the
+            # resulting vector is indistinguishable from a real one once it is
+            # in the index. Reject it here instead.
+            if waveform.size < MIN_SAMPLES:
+                logger.warning(
+                    "decoded only %.1fs for %s, skipping",
+                    waveform.size / settings.clap_sample_rate,
+                    track.id,
+                )
                 skipped += 1
                 continue
 

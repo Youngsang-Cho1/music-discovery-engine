@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app import cache
 from app.embeddings.descriptors import DESCRIPTOR_KEYS
+from app.embeddings.text_encoder import encode_query
 from app.experiments.variants import get_variant
 from app.models import Track
 from app.retrieval.rerank import RankingWeights, mmr_select, score_candidates
@@ -111,9 +112,7 @@ def embed_query(query: str) -> np.ndarray:
     if cached is not None and cached.size:
         return cached
 
-    from app.embeddings.clap import embed_text
-
-    vector = embed_text([normalized])[0]
+    vector = encode_query(normalized)
     cache.set_vector(key, vector)
     return vector
 
@@ -175,6 +174,8 @@ def recommend_by_text(
     The text encoder writes into the same space as the audio encoder, so the
     query vector goes straight into the same HNSW index with no separate
     text index and no keyword matching against track titles.
+
+    Raises `TextSearchUnavailable` if the deployment has no text encoder.
     """
     key = _ranking_cache_key(
         seed=None, query=query.lower().strip(), variant=variant, top_k=top_k,

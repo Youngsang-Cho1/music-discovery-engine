@@ -86,6 +86,25 @@ def test_discovery_arm_surfaces_the_long_tail(client, seeded):
     assert discovery_ids[0] == "a4", f"novelty failed to surface a4: {discovery_ids}"
 
 
+def test_text_search_returns_503_when_disabled(client, seeded, monkeypatch):
+    """A deployment without the model must degrade to one unavailable route,
+    not a 500 and not a broken service."""
+    from app.embeddings.text_encoder import TextSearchUnavailable
+    from app.services import recommender
+
+    def unavailable(_query):
+        raise TextSearchUnavailable("Text search is disabled on this deployment")
+
+    monkeypatch.setattr(recommender, "encode_query", unavailable)
+
+    resp = client.get("/recommend/text?q=rainy%20piano")
+    assert resp.status_code == 503
+    assert "disabled" in resp.json()["detail"]
+
+    # Everything else keeps working.
+    assert client.get("/recommend/track/a1").status_code == 200
+
+
 def test_variant_is_echoed_for_attribution(client, seeded):
     body = client.get("/recommend/track/a1?force_variant=diverse").json()
     assert body["variant"] == "diverse"

@@ -27,6 +27,7 @@ services:
     ports:
       - "6379:6379"
 
+  # Light image: no torch. Delegates text encoding to the embedder.
   backend:
     build: ./backend
     depends_on:
@@ -42,11 +43,28 @@ services:
       REDIS_URL: redis://redis:6379/0
       JAMENDO_CLIENT_ID: ${JAMENDO_CLIENT_ID:-}
       CORS_ORIGINS: http://localhost:3000
+      TEXT_ENCODER_MODE: remote
+      TEXT_ENCODER_URL: http://embedder:8100
     ports:
       - "8000:8000"
+
+  # Heavy image: CLAP. Also the image ingestion runs in:
+  #   docker compose run --rm embedder python -m app.ingestion.pipeline --target 500
+  embedder:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.ml
+    environment:
+      DATABASE_URL: postgresql+psycopg://mde:mde@postgres:5432/mde
+      QDRANT_URL: http://qdrant:6333
+      REDIS_URL: redis://redis:6379/0
+      JAMENDO_CLIENT_ID: ${JAMENDO_CLIENT_ID:-}
+    ports:
+      - "8100:8100"
     volumes:
-      # Cache HuggingFace weights across container restarts — CLAP is ~1.5GB.
-      - hfcache:/root/.cache/huggingface
+      # Weights are baked into the image; this keeps any additional downloads
+      # across restarts.
+      - hfcache:/models
 
 volumes:
   pgdata:

@@ -31,8 +31,8 @@ jobs:
           --health-retries 10
 
     env:
-      TEST_DATABASE_URL: postgresql+psycopg://mde:mde@localhost:5432/mde
-      DATABASE_URL: postgresql+psycopg://mde:mde@localhost:5432/mde
+      # Dedicated database — the suite truncates its tables between tests.
+      TEST_DATABASE_URL: postgresql+psycopg://mde:mde@localhost:5432/mde_test
 
     steps:
       - uses: actions/checkout@v4

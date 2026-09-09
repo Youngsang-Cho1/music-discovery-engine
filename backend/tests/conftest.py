@@ -18,12 +18,54 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
+# A dedicated database, never the development one. `clean_tables` truncates
+# between tests, so pointing this at `mde` silently destroys the ingested
+# catalog every time the suite runs.
 DB_URL = os.environ.get(
-    "TEST_DATABASE_URL", "postgresql+psycopg://mde:mde@localhost:5432/mde"
+    "TEST_DATABASE_URL", "postgresql+psycopg://mde:mde@localhost:5432/mde_test"
 )
+
+# Guard rather than trust the environment: a TEST_DATABASE_URL set to the dev
+# database is the exact mistake this whole arrangement exists to prevent, and
+# it fails destructively and silently.
+if DB_URL.rsplit("/", 1)[-1].split("?")[0] in {"mde", "postgres"}:
+    raise RuntimeError(
+        f"TEST_DATABASE_URL points at {DB_URL!r}. The suite truncates its "
+        "tables — use a dedicated database such as 'mde_test'."
+    )
+
+
+# Point the application at the test database *before* anything imports
+# `app.db`, which builds its engine from settings at import time. Environment
+# variables outrank the .env file in pydantic-settings, so this wins over the
+# developer's DATABASE_URL without editing their file.
+os.environ["DATABASE_URL"] = DB_URL
+
+
+def _ensure_database() -> bool:
+    """Create the test database if it doesn't exist. Returns False if the
+    server is unreachable."""
+    admin_url = DB_URL.rsplit("/", 1)[0] + "/postgres"
+    db_name = DB_URL.rsplit("/", 1)[-1]
+    try:
+        engine = create_engine(
+            admin_url, isolation_level="AUTOCOMMIT", connect_args={"connect_timeout": 2}
+        )
+        with engine.connect() as conn:
+            exists = conn.execute(
+                text("SELECT 1 FROM pg_database WHERE datname = :n"), {"n": db_name}
+            ).scalar()
+            if not exists:
+                conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+        engine.dispose()
+        return True
+    except Exception:
+        return False
 
 
 def _postgres_available() -> bool:
+    if not _ensure_database():
+        return False
     try:
         engine = create_engine(DB_URL, connect_args={"connect_timeout": 2})
         with engine.connect() as conn:
@@ -117,12 +159,20 @@ def db_session(schema):  # noqa: ARG001 - ordering dependency
 
 @pytest.fixture(scope="session")
 def schema():
-    """Create tables once per session against the real database."""
+    """Create tables once per session against the test database."""
     if not _postgres_available():
         pytest.skip("Postgres not reachable")
 
-    os.environ.setdefault("DATABASE_URL", DB_URL)
+    # Importing the models is what registers them on Base.metadata; without it
+    # create_all() silently creates nothing.
+    import app.models  # noqa: F401
     from app.db import Base, engine
+
+    # Belt and braces: if the app engine somehow resolved to another database,
+    # the truncating fixtures below must not run against it.
+    assert engine.url.database == DB_URL.rsplit("/", 1)[-1], (
+        f"app engine is bound to {engine.url.database!r}, expected the test database"
+    )
 
     Base.metadata.create_all(bind=engine)
     return engine

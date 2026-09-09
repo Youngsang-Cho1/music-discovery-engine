@@ -101,8 +101,15 @@ class VectorStore:
         exclude_track_ids: list[str] | None = None,
         tags: list[str] | None = None,
         tempo_range: tuple[float, float] | None = None,
+        with_vectors: bool = False,
     ) -> list[dict[str, Any]]:
-        """ANN search returning candidate payloads with their cosine scores."""
+        """ANN search returning candidate payloads with their cosine scores.
+
+        `with_vectors` returns each candidate's embedding under `_vector`. MMR
+        needs those to measure redundancy, and asking for them here costs one
+        extra field on a request we are already making — fetching them
+        afterwards would be one round-trip per candidate.
+        """
         must: list[Any] = []
         must_not: list[Any] = []
 
@@ -128,9 +135,16 @@ class VectorStore:
             limit=limit,
             query_filter=query_filter,
             with_payload=True,
+            with_vectors=with_vectors,
         ).points
 
-        return [{**(h.payload or {}), "audio_score": float(h.score)} for h in hits]
+        candidates: list[dict[str, Any]] = []
+        for hit in hits:
+            candidate = {**(hit.payload or {}), "audio_score": float(hit.score)}
+            if with_vectors and hit.vector is not None:
+                candidate["_vector"] = np.asarray(hit.vector, dtype=np.float32)
+            candidates.append(candidate)
+        return candidates
 
     def count(self) -> int:
         return self.client.count(collection_name=self.collection, exact=True).count

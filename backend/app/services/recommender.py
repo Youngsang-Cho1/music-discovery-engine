@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from app.embeddings.descriptors import DESCRIPTOR_KEYS
 from app.experiments.variants import get_variant
 from app.models import Track
-from app.retrieval.rerank import mmr_select, score_candidates
+from app.retrieval.rerank import RankingWeights, mmr_select, score_candidates
 from app.retrieval.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -78,14 +78,16 @@ def recommend_by_track(
         logger.warning("track %s has no embedding", seed_track_id)
         return []
 
+    weights = get_variant(variant)
     candidates = store.search(
         seed_vector,
         limit=CANDIDATE_POOL,
         exclude_track_ids=[seed_track_id],
         tags=tags,
         tempo_range=tempo_range,
+        with_vectors=weights.mmr_lambda < 1.0,
     )
-    return _finish(db, store, candidates, _track_payload(seed), variant, top_k)
+    return _finish(db, candidates, _track_payload(seed), weights, top_k)
 
 
 def recommend_by_text(
@@ -106,40 +108,39 @@ def recommend_by_text(
     """
     from app.embeddings.clap import embed_text
 
+    weights = get_variant(variant)
     query_vector = embed_text([query])[0]
     candidates = store.search(
-        query_vector, limit=CANDIDATE_POOL, tags=tags, tempo_range=tempo_range
+        query_vector,
+        limit=CANDIDATE_POOL,
+        tags=tags,
+        tempo_range=tempo_range,
+        with_vectors=weights.mmr_lambda < 1.0,
     )
     # No seed track: descriptor and tag similarity have nothing to compare
     # against, so relevance falls back to the audio-text alignment.
-    return _finish(db, store, candidates, {}, variant, top_k)
+    return _finish(db, candidates, {}, weights, top_k)
 
 
 def _finish(
     db: Session,
-    store: VectorStore,
     candidates: list[dict[str, Any]],
     seed_payload: dict[str, Any],
-    variant: str,
+    weights: RankingWeights,
     top_k: int,
 ) -> list[Recommendation]:
     if not candidates:
         return []
 
-    weights = get_variant(variant)
     scored = score_candidates(seed_payload, candidates, weights)
 
-    # MMR needs the candidate vectors to measure redundancy. Only fetch them
-    # for the head of the ranking — the tail never gets selected anyway.
-    head = scored[: min(len(scored), CANDIDATE_POOL)]
-    vectors: dict[str, np.ndarray] = {}
-    if weights.mmr_lambda < 1.0:
-        for cand in head:
-            vec = store.get_vector(cand["track_id"])
-            if vec is not None:
-                vectors[cand["track_id"]] = vec
+    # Vectors ride along from the ANN query when the variant diversifies, so
+    # MMR costs no extra requests.
+    vectors: dict[str, np.ndarray] = {
+        cand["track_id"]: cand["_vector"] for cand in scored if "_vector" in cand
+    }
 
-    selected = mmr_select(head, vectors, top_k=top_k, mmr_lambda=weights.mmr_lambda)
+    selected = mmr_select(scored, vectors, top_k=top_k, mmr_lambda=weights.mmr_lambda)
 
     tracks = _load_tracks(db, [c["track_id"] for c in selected])
     out: list[Recommendation] = []

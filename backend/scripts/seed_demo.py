@@ -14,6 +14,7 @@ import argparse
 
 import numpy as np
 
+from app import cache
 from app.config import get_settings
 from app.db import Base, SessionLocal, engine
 from app.embeddings.descriptors import compute_descriptors
@@ -106,6 +107,7 @@ def seed(n_tracks: int, seed_value: int = 0) -> None:
         db.commit()
 
     store.upsert(records)
+    cache.invalidate("rank")
     print(f"seeded {len(records)} tracks; qdrant now holds {store.count()} vectors")
 
 

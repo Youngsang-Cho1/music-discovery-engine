@@ -17,6 +17,7 @@ import httpx
 import numpy as np
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from app import cache
 from app.config import get_settings
 from app.db import Base, SessionLocal, engine
 from app.embeddings.clap import embed_audio, load_waveform
@@ -109,7 +110,16 @@ async def ingest(target: int, tags: str | None, order: str) -> None:
         if batch:
             processed += _flush(batch, store, settings.clap_sample_rate)
 
-    logger.info("done. ingested=%d skipped=%d vectors=%d", processed, skipped, store.count())
+    # New tracks change what every ranking should return. Text-embedding cache
+    # entries stay valid — the model didn't change, only the corpus.
+    dropped = cache.invalidate("rank")
+    logger.info(
+        "done. ingested=%d skipped=%d vectors=%d rankings_invalidated=%d",
+        processed,
+        skipped,
+        store.count(),
+        dropped,
+    )
 
 
 def _flush(batch, store: VectorStore, sample_rate: int) -> int:

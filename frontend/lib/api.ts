@@ -8,15 +8,42 @@ import type {
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+/** An error carrying the HTTP status, so callers can distinguish a feature
+ *  being switched off (503) from a genuine failure. */
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+
+  /** Text search is unavailable on this deployment — not a bug. */
+  get isUnavailable(): boolean {
+    return this.status === 503;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-    cache: "no-store",
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      ...init,
+      headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError(0, "Can't reach the API. Is the backend running?");
+  }
+
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`${res.status} ${res.statusText}${body ? ` — ${body}` : ""}`);
+    // FastAPI puts the human-readable reason in `detail`.
+    const detail = await res
+      .json()
+      .then((body) => body?.detail)
+      .catch(() => null);
+    throw new ApiError(res.status, detail ?? `${res.status} ${res.statusText}`);
   }
   return res.json() as Promise<T>;
 }

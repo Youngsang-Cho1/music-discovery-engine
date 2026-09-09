@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ResultsList } from "@/components/ResultsList";
 import { TrackRow } from "@/components/TrackRow";
-import { randomTracks, recommendByText } from "@/lib/api";
+import { ApiError, randomTracks, recommendByText } from "@/lib/api";
 import type { RecommendationResponse, Track } from "@/lib/types";
 
 // Prompts that only work because audio and text share one embedding space —
@@ -22,6 +22,10 @@ export default function Home() {
   const [seeds, setSeeds] = useState<Track[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Text search off on this deployment is a different thing from an error:
+  // the rest of the app still works, so the UI should say so rather than
+  // present a red failure box.
+  const [unavailable, setUnavailable] = useState<string | null>(null);
 
   useEffect(() => {
     randomTracks(10)
@@ -33,11 +37,16 @@ export default function Home() {
     if (q.trim().length < 2) return;
     setLoading(true);
     setError(null);
+    setUnavailable(null);
     try {
       setResults(await recommendByText(q, { topK: 20 }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Search failed");
       setResults(null);
+      if (err instanceof ApiError && err.isUnavailable) {
+        setUnavailable(err.message);
+      } else {
+        setError(err instanceof Error ? err.message : "Search failed");
+      }
     } finally {
       setLoading(false);
     }
@@ -99,6 +108,13 @@ export default function Home() {
             {error}
           </p>
         )}
+
+        {unavailable && (
+          <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+            {unavailable} Pick any track below and use{" "}
+            <span className="font-medium">similar →</span> instead.
+          </p>
+        )}
       </section>
 
       {results && (
@@ -113,7 +129,9 @@ export default function Home() {
         </section>
       )}
 
-      {!results && seeds.length > 0 && (
+      {/* Seed list stays visible when text search is off — it is the fallback
+          the message above points at. */}
+      {(!results || unavailable) && seeds.length > 0 && (
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-medium text-white/70">Or start from a track</h2>
           <div className="flex flex-col gap-1">

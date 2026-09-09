@@ -226,3 +226,54 @@ def test_event_summary_groups_by_variant_and_action(client, seeded, session_id):
     assert counts[("control", "complete")] == 1
     assert counts[("control", "skip")] == 1
     assert counts[("diverse", "complete")] == 1
+
+
+# --- catalog ------------------------------------------------------------
+
+
+def test_catalog_stats_counts_the_corpus(client, seeded):
+    stats = client.get("/catalog/stats").json()
+    assert stats["tracks"] == len(seeded)
+    assert stats["artists"] == 6  # a1-a4 have their own, b* share one, c* share one
+    assert stats["total_duration_sec"] == 180 * len(seeded)
+
+
+def test_catalog_stats_ranks_tags_by_frequency(client, seeded):
+    stats = client.get("/catalog/stats").json()
+    counts = {t["tag"]: t["count"] for t in stats["top_tags"]}
+    # rock: a1-a4. ambient: c1-c4. jazz: b1-b2.
+    assert counts["rock"] == 4
+    assert counts["ambient"] == 4
+    assert counts["jazz"] == 2
+    assert stats["top_tags"][0]["count"] >= stats["top_tags"][-1]["count"]
+
+
+def test_catalog_stats_on_an_empty_catalog(client):
+    stats = client.get("/catalog/stats").json()
+    assert stats == {
+        "tracks": 0,
+        "artists": 0,
+        "total_duration_sec": 0,
+        "top_tags": [],
+    }
+
+
+def test_track_tag_filter_is_server_side(client, seeded):
+    """The client only holds one page, so filtering there would report "none"
+    for a tag with more matches further down the catalog."""
+    rows = client.get("/tracks?tags=jazz").json()
+    assert {t["id"] for t in rows} == {"b1", "b2"}
+
+
+def test_track_tag_filter_matches_any_of_several(client, seeded):
+    rows = client.get("/tracks?tags=jazz&tags=ambient").json()
+    assert {t["id"] for t in rows} == {"b1", "b2", "c1", "c2", "c3", "c4"}
+
+
+def test_track_tag_filter_combines_with_name_search(client, seeded):
+    rows = client.get("/tracks?tags=rock&q=Track a1").json()
+    assert [t["id"] for t in rows] == ["a1"]
+
+
+def test_unknown_tag_returns_nothing(client, seeded):
+    assert client.get("/tracks?tags=doesnotexist").json() == []

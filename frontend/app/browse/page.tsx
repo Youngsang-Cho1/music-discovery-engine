@@ -16,10 +16,11 @@ export default function BrowsePage() {
   const [submitted, setSubmitted] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
 
-  // Results tagged with the query they belong to, so a stale response from a
+  // Results tagged with the request they belong to, so a stale response from a
   // slower earlier request can't overwrite a newer one, and nothing has to be
   // reset synchronously inside the effect.
-  const [loaded, setLoaded] = useState<{ query: string; tracks: Track[] } | null>(null);
+  const requestKey = `${submitted}::${activeTag ?? ""}`;
+  const [loaded, setLoaded] = useState<{ key: string; tracks: Track[] } | null>(null);
 
   useEffect(() => {
     getCatalogStats()
@@ -29,26 +30,26 @@ export default function BrowsePage() {
 
   useEffect(() => {
     let cancelled = false;
-    listTracks(submitted || undefined, 100)
+    // Filtering server-side, not over the loaded page: the client only holds
+    // 100 rows, so filtering here would report "none" for tags that have
+    // hundreds of tracks further down the catalog.
+    listTracks({
+      q: submitted || undefined,
+      tags: activeTag ? [activeTag] : undefined,
+      limit: 100,
+    })
       .then((rows) => {
-        if (!cancelled) setLoaded({ query: submitted, tracks: rows });
+        if (!cancelled) setLoaded({ key: requestKey, tracks: rows });
       })
       .catch(() => {
-        if (!cancelled) setLoaded({ query: submitted, tracks: [] });
+        if (!cancelled) setLoaded({ key: requestKey, tracks: [] });
       });
     return () => {
       cancelled = true;
     };
-  }, [submitted]);
+  }, [requestKey, submitted, activeTag]);
 
-  const tracks = loaded?.query === submitted ? loaded.tracks : null;
-
-  // Tag filtering is client-side over the loaded page: /tracks has no tag
-  // parameter, and adding one would duplicate the filtering that already lives
-  // in the vector store's payload index for the recommendation path.
-  const visible = (tracks ?? []).filter(
-    (t) => !activeTag || t.tags.includes(activeTag),
-  );
+  const visible = loaded?.key === requestKey ? loaded.tracks : null;
 
   const genreTags = (stats?.top_tags ?? []).filter((t) => !NOT_A_GENRE.has(t.tag)).slice(0, 14);
 
@@ -126,13 +127,11 @@ export default function BrowsePage() {
         </div>
       )}
 
-      {tracks === null ? (
+      {visible === null ? (
         <ResultsSkeleton rows={8} />
       ) : visible.length === 0 ? (
         <p className="rounded-xl border border-white/10 px-4 py-10 text-center text-sm text-white/35">
-          {activeTag
-            ? `No tracks tagged “${activeTag}” in this page of results.`
-            : "No tracks matched."}
+          {activeTag ? `No tracks tagged “${activeTag}”.` : "No tracks matched."}
         </p>
       ) : (
         <div className="flex flex-col gap-0.5">

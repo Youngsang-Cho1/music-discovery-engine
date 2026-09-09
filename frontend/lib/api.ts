@@ -70,9 +70,14 @@ function filterParams(filters: RecommendFilters = {}): URLSearchParams {
   return params;
 }
 
-export function listTracks(q?: string, limit = 50): Promise<Track[]> {
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (q) params.set("q", q);
+export function listTracks(
+  opts: { q?: string; tags?: string[]; limit?: number; offset?: number } = {},
+): Promise<Track[]> {
+  const params = new URLSearchParams({ limit: String(opts.limit ?? 50) });
+  if (opts.q) params.set("q", opts.q);
+  if (opts.offset) params.set("offset", String(opts.offset));
+  // Repeated keys — FastAPI reads them as a list.
+  opts.tags?.forEach((t) => params.append("tags", t));
   return request<Track[]>(`/tracks?${params}`);
 }
 

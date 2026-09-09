@@ -148,7 +148,7 @@ docker compose up -d postgres qdrant redis
 cd backend
 cp .env.example .env               # add your Jamendo client id
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-ml.txt   # ML deps for local text search
 uvicorn app.main:app --reload      # http://localhost:8000/docs
 
 # 3. Populate the catalog (downloads audio, embeds it, discards the audio)
@@ -169,24 +169,53 @@ Or bring the whole stack up at once:
 JAMENDO_CLIENT_ID=... docker compose up --build
 ```
 
+Without a Jamendo key, `python -m scripts.seed_demo --tracks 300` fills the catalog with synthetic
+tracks. It exercises the wiring but the vectors carry no acoustic meaning, so text search returns
+nothing sensible against it.
+
+## Deployment shape
+
+Text search is the only route that needs CLAP resident at request time — seed-track
+recommendation reads vectors computed during ingestion. That asymmetry drives the split:
+
+| Image | Contains | Size | Runs |
+| --- | --- | --- | --- |
+| `Dockerfile` | API only, no torch | **739 MB** | The whole API |
+| `Dockerfile.ml` | + torch (CPU build), transformers, librosa | ~3 GB | Embedder service, ingestion jobs |
+
+`TEXT_ENCODER_MODE` picks how the API resolves a query:
+
+* `local` — load CLAP in-process (development, or an instance with the RAM to spare)
+* `remote` — POST to the embedder service, scaled independently
+* `disabled` — `/recommend/text` returns **503** and every other route keeps working
+
+Loading torch into the API just to serve one endpoint is what forces an otherwise-small service
+onto a large instance. Splitting it means the API fits a 1 GB instance, and the embedder can scale
+to zero between queries.
+
 ## Tests
 
 ```bash
 docker compose up -d postgres      # the API tests need a real database
-cd backend  && pytest tests -q     # 68 tests
+cd backend  && pytest tests -q     # 88 tests
 cd frontend && npm run build       # typecheck + production build
 ```
 
-**Unit** (46) — signal fusion, MMR diversity and the artist cap, descriptor extraction against
-synthetic signals with known ground truth, cache key construction and failure degradation, and the
+**Unit** (66) — signal fusion, MMR diversity and the artist cap, descriptor extraction against
+synthetic signals with known ground truth, cache key construction and failure degradation, the
+Jamendo client's empty-page retry, waveform decoding from truncated downloads, and the
 Beta-posterior math including the small-sample case a naive rate comparison gets wrong.
 
 **Integration** (22) — the full API against real Postgres, with the vector store faked in-process.
 Postgres is real because the ingestion and bandit paths use `ON CONFLICT`, so testing on SQLite
 would skip the SQL most worth checking. Covered: cluster recovery, the artist cap, tag filtering,
 `_vector` never leaking into a response, vectors being requested only when the selected arm
-actually diversifies, and each event type moving the posterior the right way — including that a
-late skip is *not* counted against the arm. They skip automatically if Postgres isn't reachable.
+actually diversifies, text search degrading to 503 rather than 500, and each event type moving the
+posterior the right way — including that a late skip is *not* counted against the arm.
+
+The suite runs against a dedicated `mde_test` database and refuses to start if pointed at the
+development one, because it truncates between tests. It skips automatically if Postgres isn't
+reachable.
 
 ## API
 

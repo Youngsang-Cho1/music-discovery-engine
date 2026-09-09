@@ -47,6 +47,17 @@ def _l2_normalize(x: np.ndarray) -> np.ndarray:
     return x / np.where(norm == 0, 1.0, norm)
 
 
+def _as_vectors(output) -> np.ndarray:
+    """Extract the projected embedding from a CLAP feature call.
+
+    transformers <5 returned a plain tensor from `get_*_features`; 5.x returns
+    a `BaseModelOutputWithPooling` whose `pooler_output` holds the projected
+    vector. Accept both so the pinned version isn't load-bearing.
+    """
+    tensor = output if hasattr(output, "cpu") else output.pooler_output
+    return _l2_normalize(tensor.cpu().numpy().astype(np.float32))
+
+
 def load_waveform(audio_bytes: bytes, *, seconds: int | None = None) -> np.ndarray:
     """Decode arbitrary audio bytes to a mono waveform at CLAP's sample rate.
 
@@ -78,8 +89,9 @@ def embed_audio(waveforms: list[np.ndarray]) -> np.ndarray:
     model, processor, device = _load_model()
     settings = get_settings()
 
+    # `audio=` (singular) — transformers 5 removed the old `audios=` alias.
     inputs = processor(
-        audios=waveforms,
+        audio=waveforms,
         sampling_rate=settings.clap_sample_rate,
         return_tensors="pt",
         padding=True,
@@ -88,7 +100,7 @@ def embed_audio(waveforms: list[np.ndarray]) -> np.ndarray:
     with torch.no_grad():
         features = model.get_audio_features(**inputs)
 
-    return _l2_normalize(features.cpu().numpy().astype(np.float32))
+    return _as_vectors(features)
 
 
 def embed_text(queries: list[str]) -> np.ndarray:
@@ -101,4 +113,4 @@ def embed_text(queries: list[str]) -> np.ndarray:
     with torch.no_grad():
         features = model.get_text_features(**inputs)
 
-    return _l2_normalize(features.cpu().numpy().astype(np.float32))
+    return _as_vectors(features)

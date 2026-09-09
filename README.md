@@ -1,96 +1,180 @@
-# 🎵 Multimodal Music Discovery Engine
-**NYU CSCI-UA 473: Fundamentals of Machine Learning (Final Project)**
+# Music Discovery Engine
+
+Search Creative-Commons music by **how it sounds**, not by how many times it has been played.
+
+Type *"rainy day lo-fi with soft piano"* and get tracks whose audio matches that description —
+including tracks with three plays, which no collaborative-filtering system can reach.
+
+> **Status.** v2 is under active development. The v1 coursework version (NumPy PCA / K-Means over
+> hand-crafted librosa features, Streamlit UI) is preserved under [`legacy/`](legacy/) — see
+> [What changed from v1](#what-changed-from-v1) for why each piece was replaced.
 
 ---
 
-## 🔗 Live Demo & Documentation
-*   **[🟢 Live Web App (Streamlit)](https://youngsang-cho1-ml-final-appstreamlit-app-pgt8wj.streamlit.app/)**
-*   **[📄 Mathematical Design Document (DESIGN_DOC.md)](./DESIGN_DOC.md)**: Deep dive into the from-scratch algorithms (PCA, K-Means++, Hybrid Metrics).
+## Why this exists
+
+Recommenders built on play counts and co-listen matrices have a structural blind spot: a track
+with no listening history has no neighbours, so it cannot be recommended, so it never accumulates
+history. Genre tags are the usual patch, and they are far too coarse — "electronic" spans an
+ambient drone and a hardstyle kick.
+
+This engine indexes the **audio itself**. A track's position in the index is determined entirely by
+what it sounds like, so a brand-new upload is as retrievable as a catalog staple on day one. That
+is the differentiator, and the `discovery` ranking arm exists specifically to test whether it holds
+up against listeners.
 
 ---
 
-## 📖 Project Objective
-A high-fidelity music recommendation engine that focuses on **Acoustic Consistency**. We deliberately avoid black-box libraries, implementing core ML algorithms (Manual PCA, Manual K-Means++) from scratch in `NumPy` to demonstrate a deep understanding of vector space models and multimodal fusion.
+## Architecture
 
-### The "Skip" Problem
-Traditional systems rely on broad genre tags or popularity. We solve this by creating a **mathematical "ear"** for sound, ensuring that recommendations are acoustically aligned with the seed song's timbre, texture, and energy.
-
----
-
-## 🧠 Core Architecture: Hybrid Retrieval
-We fuse two distinct modalities using a weighted distance ensemble:
-
-### 1. Distance Metric
-`Score = MSE(Metadata_Dist) + λ × (1 − Cosine_Similarity(Audio_Embeddings))`
-
-*   **Metadata (8D):** High-level vibes (Danceability, Energy, etc.). MSE captures absolute intensity differences.
-*   **Audio Embedding (56D):** Raw MFCC, Chroma, and Spectral features. Cosine Similarity captures the *direction* of the acoustic signature, overcoming the curse of dimensionality.
-
-### 2. Preventing "Cosine Collapse"
-Raw Librosa features vary wildly in scale (MFCC_0: -300, ZCR: 0.05). If unscaled, the largest dimensions dominate the vector angle, making all songs look identical. 
-**Our Solution:** We enforce **Z-score Standardization (Zero Mean, Unit Variance)** across the entire 13k+ song dataset. This ensures every acoustic property has an equal voice, resulting in a balanced similarity space.
-
----
-
-## ⚖️ λ-Tuning & Evaluation (Proven Merit)
-We don't guess our parameters. We tune them via a **Same-Artist vs Random-Pair Discrimination Sweep**.
-
-### Results (on 13,162 unique tracks)
-| Variant | Pass Rate (Discrimination Accuracy) |
-| :--- | :--- |
-| Random Baseline | 50.0% |
-| Metadata-only | 76.7% |
-| Audio-only | 76.0% |
-| **Hybrid (λ=0.1)** | **83.3%** ✅ |
-
-*   **Pass Rate:** The probability that a song from the same artist is ranked closer than a completely random song.
-*   **Chosen λ = 0.1:** Maximizes the engine's ability to recognize consistent production styles and vocal timbres.
-
----
-
-## 🚀 Key Features & Interactive UI
-*   **🎧 Seed Song Tab:** Discover similarity with premium visualizations.
-*   **🔍 Analyze Any Song:** Zero-text inference. Download any YouTube URL, extract its 56D DNA, and find its matches in our 13k database.
-*   **🎚️ Live λ Slider:** Side-by-side control. Shift from "Metadata-focused" (Balanced) to "Sound-focused" (Pure Audio) in real-time.
-*   **📼 Global Music Player:** YouTube-style persistent player with a unified queue. Starts with the seed song and flows seamlessly into recommendations.
-*   **📊 3D PCA Discovery:** Explore the 13,162-song vector space in interactive 3D, projected via our manual SVD implementation.
-
----
-
-## 🗂️ Project Structure
 ```
-src/
-  pca.py               # [MANUAL] SVD-based PCA implementation
-  clustering.py        # [MANUAL] Lloyd's algorithm & K-Means++ implementation
-  recommender.py       # Hybrid distance logic (MSE + Cosine)
-  tune_lambda.py       # λ tuning sweep & evaluation scripts
-  audio_feature_extractor.py  # 56D Librosa feature engineering
-  fetch_youtube_audio.py      # Automated nightly download pipeline
-  build_master_dataset.py     # Data fusion & Z-score scaling
+                  ┌──────────────────────── ingestion (offline) ─────────────────────────┐
+   Jamendo API ──►  fetch CC-licensed tracks ──► decode 10s window ──► CLAP encoder
+   (official,                                          │                     │
+    licensed)                                          ▼                     ▼
+                                        librosa scalar descriptors     512-d embedding
+                                                       │                     │
+                                                       ▼                     ▼
+                                                   Postgres              Qdrant (HNSW)
+                                              (catalog + events)        (audio vectors)
+                  └──────────────────────────────────────────────────────────────────────┘
 
-app/
-  streamlit_app.py     # Premium UI (YouTube Music style)
-
-data/
-  dataset/             # master_music_data.parquet (Streamlit App DB)
-  audio_files/         # Raw .m4a files from YouTube (git-ignored)
-  embeddings/          # 58D Librosa extractions (git-ignored)
+                  ┌───────────────────────── serving (online) ───────────────────────────┐
+   text query ──►  CLAP text encoder ──┐
+                                       ├──► Qdrant ANN ──► ~200 candidates
+   seed track ──►  stored vector ──────┘                        │
+                                                                ▼
+                                          stage 2: weighted signal fusion + MMR
+                                          (audio · descriptor · tag · novelty)
+                                                                │
+                                                                ▼
+                                                             top-K ──► Next.js player
+                                                                              │
+                                    Thompson-sampling bandit ◄── skip/complete events
+                  └──────────────────────────────────────────────────────────────────────┘
 ```
 
+**Stack** — FastAPI · Postgres · Qdrant · Redis · CLAP (`laion/larger_clap_music_and_speech`) ·
+librosa · Next.js 16 / React 19 / Tailwind 4 · Docker Compose · GitHub Actions
+
+### Two-stage retrieval
+
+Scoring the whole catalog per request is `O(n)` and stops working the moment the catalog grows.
+Stage 1 is an HNSW approximate-nearest-neighbour lookup in Qdrant that narrows the catalog to 200
+candidates in sublinear time, with genre and tempo filters pushed into the index rather than
+applied as a post-hoc mask. Stage 2 does the expensive part — per-signal scoring and diversity —
+on those 200 only. This is the standard candidate-generation / reranking split used in production
+recommenders, and it is what makes latency independent of catalog size.
+
+### Ranking signals
+
+Stage 2 keeps four signals separate instead of collapsing them into one number:
+
+| Signal | What it measures |
+| --- | --- |
+| `audio` | CLAP cosine — timbral and semantic similarity |
+| `descriptor` | L1 similarity over tempo, loudness, brightness, percussiveness, dynamic range, onset density |
+| `tag` | Jaccard overlap on Jamendo genre/instrument tags |
+| `novelty` | log-damped inverse play count — the long-tail term |
+
+Selection then runs **Maximal Marginal Relevance** with a per-artist cap. Without it, a seed
+track's nearest CLAP neighbours are routinely other tracks from the same album — every individual
+score correct, the list useless.
+
+Each response carries its per-signal breakdown, so the UI can say *why* a track was picked
+("similar tempo & energy", "hidden gem") instead of presenting an unexplained ranking.
+
+### Online experimentation
+
+v1 fixed its fusion weight at `λ = 0.1`, chosen offline by asking whether same-artist pairs rank
+above random pairs. That proxy is not the objective — nobody listens to a pair-discrimination rate.
+
+v2 defines four ranking arms (`control`, `descriptor_heavy`, `diverse`, `discovery`) and assigns
+them by **Thompson sampling**. Reward is binary per impression: did the listener keep the track past
+the skip threshold? Beta posteriors update per outcome and traffic shifts toward winning arms
+automatically — a fixed 25/25/25/25 split would keep paying full price for arms already visibly
+losing. `/experiments` reports each arm's posterior mean, 95% credible interval, and Monte-Carlo
+**P(best)**, which is the quantity a ship decision should rest on; comparing raw conversion rates
+would call a 5/10 arm a winner over a 400/1000 arm.
+
+`control` reproduces v1's behaviour exactly, so every other arm is measured against the shipped
+baseline rather than against nothing.
+
 ---
 
-## 🛠️ Setup & Usage
-1. **Install:** `pip install -r requirements.txt`
-2. **Launch:** `python -m streamlit run app/streamlit_app.py`
-3. **Reproduce Eval:** `python3 src/tune_lambda.py`
+## What changed from v1
+
+| | v1 (coursework) | v2 (this) | Why |
+| --- | --- | --- | --- |
+| **Audio source** | YouTube via `yt-dlp`, with randomized sleeps to avoid bot detection | Jamendo API | Scraping YouTube audio violates its ToS and carries no redistribution right. Tolerable for a local class project; not something you can deploy publicly. Jamendo serves CC-licensed audio through an official API with hosted stream URLs. |
+| **Audio storage** | every `.m4a` kept on disk | nothing retained — decode, embed, discard | No copyrightable artifact is stored; playback points at Jamendo's CDN. |
+| **Representation** | 56 hand-picked librosa statistics | CLAP embeddings (512-d) | Hand-crafted statistics are only meaningful relative to each other. CLAP shares one space with text, which is what makes natural-language search possible at all. |
+| **Metadata** | Spotify `danceability` / `energy` / `valence` | descriptors computed from the waveform | Spotify features are undefined for every track outside their catalog, including all of ours. |
+| **Fusion** | `meta_mse + λ·(1 − cos)`, λ frozen offline | four separate signals, weights as bandit arms | One scalar can't express "acoustically close *but* tonally varied", and the proxy λ was tuned on isn't the goal. |
+| **Search index** | full NumPy scan of the catalog | Qdrant HNSW | Linear scan is fine at 16k tracks and hopeless past that. |
+| **Grouping** | K-Means++ with `K` hand-set to 8 | ANN neighbourhoods + MMR | `K` was a guess, and Voronoi boundaries split genuinely adjacent tracks. |
+| **Interface** | Streamlit | Next.js + FastAPI | Streamlit is a prototyping tool — no custom UX, no real session model, no path to horizontal scaling. |
+| **Evaluation** | offline same-artist pair discrimination (83.3%) | online skip/completion with bandit posteriors | An offline proxy can't tell you whether anyone wanted the recommendation. |
+
+The v1 implementation stands on its own terms — PCA and K-Means++ were written from scratch in
+NumPy to satisfy a no-black-box requirement, and that code is intact in [`legacy/`](legacy/).
+What changed is the target: a graded artifact and a deployed service have different constraints.
 
 ---
 
-## 👥 Division of Labor
-| Team Member | Primary Responsibility |
-| :--- | :--- |
-| **Aiden** | Data engineering — YouTube pipeline, Librosa feature extraction |
-| **Kai** | UI/UX Design, JavaScript/CSS, Global Player integration |
-| **Max** | Manual PCA (SVD) & Clustering implementation |
-| **Yanfu** | Distance metric design, λ tuning methodology |
-| **Sue** | Technical defense, Evaluation metrics & Sanity checks |
+## Running locally
+
+```bash
+# 1. Infrastructure
+docker compose up -d postgres qdrant redis
+
+# 2. Backend
+cd backend
+cp .env.example .env               # add your Jamendo client id
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload      # http://localhost:8000/docs
+
+# 3. Populate the catalog (downloads audio, embeds it, discards the audio)
+python -m app.ingestion.pipeline --target 1000
+
+# 4. Frontend
+cd ../frontend
+cp .env.example .env.local
+npm install && npm run dev         # http://localhost:3000
+```
+
+A free Jamendo `client_id` takes about a minute to obtain at
+[devportal.jamendo.com](https://devportal.jamendo.com/).
+
+Or bring the whole stack up at once:
+
+```bash
+JAMENDO_CLIENT_ID=... docker compose up --build
+```
+
+## Tests
+
+```bash
+cd backend  && pytest tests -q     # ranking, descriptors, bandit statistics
+cd frontend && npm run build       # typecheck + production build
+```
+
+The backend suite covers the pure logic — signal fusion, MMR diversity and the artist cap,
+descriptor extraction against synthetic signals with known ground truth, and the Beta-posterior
+math including the small-sample case a naive rate comparison gets wrong.
+
+## API
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /recommend/text?q=...` | Natural-language mood search |
+| `GET /recommend/track/{id}` | Seed-track recommendations |
+| `GET /tracks`, `/tracks/random`, `/tracks/{id}` | Catalog browsing |
+| `POST /events` | Log an impression / play / skip / complete / like |
+| `GET /experiments/report` | Per-arm posteriors and P(best) |
+
+## Licensing
+
+All audio is Creative-Commons licensed and streamed from Jamendo, with attribution and a link to
+the specific CC deed shown in the player. No audio is redistributed or stored by this service.

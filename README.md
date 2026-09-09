@@ -66,6 +66,72 @@ applied as a post-hoc mask. Stage 2 does the expensive part — per-signal scori
 on those 200 only. This is the standard candidate-generation / reranking split used in production
 recommenders, and it is what makes latency independent of catalog size.
 
+### Why CLAP, and not the v1 features
+
+The claim that a pretrained embedding beats hand-crafted statistics needed
+checking, because CLAP is the only reason the deployment needs a 5.92 GB image
+and a separately-scaled service. Both representations were built from the same
+three windows of the same 119 tracks, with v1's z-score normalization applied
+to the librosa vector so its "cosine collapse" fix was in place
+(`scripts/compare_representations.py`):
+
+| Representation | Same-artist discrimination | Tag correlation |
+| --- | --- | --- |
+| **CLAP (512-d, pooled)** | **90.8%** | **0.221** |
+| librosa (56-d, v1) | 71.0% | 0.058 |
+
+*Same-artist discrimination: does a same-artist pair rank closer than a random
+pair? 50% is chance. Tag correlation: Spearman ρ between embedding similarity
+and Jaccard overlap on human-assigned Jamendo tags, which neither representation
+ever saw.*
+
+The tag correlation is the telling one: at ρ = 0.058 the librosa vector has
+essentially no relationship to how people actually group music. CLAP earns its
+cost on retrieval quality alone — natural-language search is then free, since
+the model is already loaded.
+
+### One window is not a song
+
+CLAP's feature extractor is hard-capped at 480,000 samples — exactly 10s at
+48 kHz — and its default truncation picks a *random* window. So "embed the
+whole track" is not an option the model offers; the only question is which 10
+seconds, and how many.
+
+Measured on real tracks, two 10s windows of the *same* song score as low as
+**0.0 cosine** against each other — the same magnitude as the gap between
+unrelated tracks. A single window is a high-variance sample of a song, not a
+description of it. Embedding several windows and mean-pooling fixes it:
+
+| Windows | Self-agreement across halves of the same track (mean) | Worst case |
+| --- | --- | --- |
+| 1 (middle) | 0.710 | **0.394** |
+| 3 (pooled) | 0.853 | **0.821** |
+
+Mean rather than max pooling: the windows are alternative views of one track,
+so averaging unit vectors moves the result toward whatever they agree on while
+the parts they disagree about cancel. Max would just select one window back out
+and reintroduce the variance.
+
+### Catalog diversity
+
+Ingesting by `popularity_total` returns the same global head no matter which
+tag is attached — measured at **0 new tracks out of 100** once that head is
+already stored, against ~100% new for `releasedate_desc`, `id_asc`, or `name`.
+Diversity comes from varying the *sort*, so ingestion sweeps tag × order
+combinations:
+
+```bash
+python -m app.ingestion.pipeline \
+  --target 120 \
+  --tags "electronic,rock,jazz,classical,hiphop,ambient,folk,metal,pop,funk" \
+  --orders "releasedate_desc,id_asc,name"
+```
+
+The sweep runs in one process because CLAP takes ~26s to load; a shell loop
+over the CLI paid that once per combination, which dominated the actual work.
+Downloads within a batch run concurrently — that alone took ingestion from
+3.8 s/track to **1.9 s/track** while tripling the number of windows embedded.
+
 ### Caching
 
 Two things in the request path are expensive and highly repeatable, and both are
@@ -271,7 +337,7 @@ Needs ~2 GB; the healthcheck timeout is 300s because the image warms CLAP at sta
 
 ```bash
 docker compose up -d postgres      # the API tests need a real database
-cd backend  && pytest tests -q     # 100 tests
+cd backend  && pytest tests -q     # 107 tests
 cd frontend && npm run build       # typecheck + production build
 ```
 
@@ -280,7 +346,7 @@ synthetic signals with known ground truth, cache key construction and failure de
 Jamendo client's empty-page retry, waveform decoding from truncated downloads, and the
 Beta-posterior math including the small-sample case a naive rate comparison gets wrong.
 
-**Integration** (22) — the full API against real Postgres, with the vector store faked in-process.
+**Integration** (29) — the full API against real Postgres, with the vector store faked in-process.
 Postgres is real because the ingestion and bandit paths use `ON CONFLICT`, so testing on SQLite
 would skip the SQL most worth checking. Covered: cluster recovery, the artist cap, tag filtering,
 `_vector` never leaking into a response, vectors being requested only when the selected arm
@@ -297,9 +363,24 @@ reachable.
 | --- | --- |
 | `GET /recommend/text?q=...` | Natural-language mood search |
 | `GET /recommend/track/{id}` | Seed-track recommendations |
-| `GET /tracks`, `/tracks/random`, `/tracks/{id}` | Catalog browsing |
+| `GET /tracks?q=&tags=` | Catalog listing, name search, tag filter |
+| `GET /tracks/random`, `/tracks/{id}` | Seed picks and single-track lookup |
+| `GET /catalog/stats` | Corpus size, artist count, tag distribution |
 | `POST /events` | Log an impression / play / skip / complete / like |
 | `GET /experiments/report` | Per-arm posteriors and P(best) |
+
+### Pages
+
+| Route | What it does |
+| --- | --- |
+| `/` | Natural-language search, with example prompts and seed tracks |
+| `/browse` | Catalog listing with name search and tag filters |
+| `/track/[id]` | Seed track, its audio profile, and what sounds like it |
+| `/experiments` | Live bandit posteriors, credible intervals, P(best) |
+
+Every result row can be expanded to show its four-signal breakdown, so a
+ranking is explainable rather than asserted — the same numbers the reranker
+used, not a post-hoc rationalization.
 
 ## Licensing
 

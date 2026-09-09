@@ -178,10 +178,10 @@ nothing sensible against it.
 Text search is the only route that needs CLAP resident at request time — seed-track
 recommendation reads vectors computed during ingestion. That asymmetry drives the split:
 
-| Image | Contains | Size | Runs |
+| Image | Contains | Size (measured) | Runs |
 | --- | --- | --- | --- |
 | `Dockerfile` | API only, no torch | **739 MB** | The whole API |
-| `Dockerfile.ml` | + torch (CPU build), transformers, librosa | ~3 GB | Embedder service, ingestion jobs |
+| `Dockerfile.ml` | + torch (CPU build), transformers, librosa, baked CLAP weights | **5.92 GB** | Embedder service, ingestion jobs |
 
 `TEXT_ENCODER_MODE` picks how the API resolves a query:
 
@@ -193,8 +193,29 @@ Loading torch into the API just to serve one endpoint is what forces an otherwis
 onto a large instance. Splitting it means the API fits a 1 GB instance, and the embedder can scale
 to zero between queries.
 
-Verified locally: the API image reports `ModuleNotFoundError: torch`, serves `/recommend/track/{id}`
-normally, and answers `/recommend/text` with `503 Text search is disabled on this deployment.`
+The API image is **8× smaller**. Verified end-to-end against both built images:
+
+* API image: `import torch` → `ModuleNotFoundError`, and `/recommend/track/{id}` serves normally.
+* `TEXT_ENCODER_MODE=disabled` → `/recommend/text` returns `503 Text search is disabled on this
+  deployment`, every other route unaffected.
+* `TEXT_ENCODER_MODE=remote` → the torch-free API answers a text query correctly by calling the
+  embedder container, returning L2-normalized 512-d vectors from `POST /embed`.
+
+### Rate limiting
+
+Sliding-window counters in Redis, per client IP, with per-route budgets — a seed-track
+recommendation is two Qdrant calls, an uncached text query is a transformer forward pass:
+
+| Route | Budget |
+| --- | --- |
+| `/tracks/*`, `/recommend/track/{id}` | 120 / min |
+| `/recommend/text` | 20 / min |
+| `POST /events` | 600 / min (one impression per rendered row) |
+
+A sorted set rather than a fixed-window counter, because a fixed window lets a caller spend a full
+budget at the end of one window and again at the start of the next. Verified against the running
+API: requests 1–20 return 200, 21+ return 429 with `Retry-After`, and a second IP is unaffected.
+Like the cache, it fails open — Redis being down must not become an API outage.
 
 ### Deploying
 
@@ -222,11 +243,11 @@ Needs ~2 GB; the healthcheck timeout is 300s because the image warms CLAP at sta
 
 ```bash
 docker compose up -d postgres      # the API tests need a real database
-cd backend  && pytest tests -q     # 88 tests
+cd backend  && pytest tests -q     # 96 tests
 cd frontend && npm run build       # typecheck + production build
 ```
 
-**Unit** (66) — signal fusion, MMR diversity and the artist cap, descriptor extraction against
+**Unit** (74) — signal fusion, MMR diversity and the artist cap, descriptor extraction against
 synthetic signals with known ground truth, cache key construction and failure degradation, the
 Jamendo client's empty-page retry, waveform decoding from truncated downloads, and the
 Beta-posterior math including the small-sample case a naive rate comparison gets wrong.

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_store
+from app.api.rate_limit import READ_BUDGET, SEARCH_BUDGET, rate_limit
 from app.db import get_db
 from app.embeddings.text_encoder import TextSearchUnavailable
 from app.experiments import bandit
@@ -38,7 +39,11 @@ def _to_out(recs) -> list[RecommendationOut]:
     ]
 
 
-@router.get("/track/{track_id}", response_model=RecommendationResponse)
+@router.get(
+    "/track/{track_id}",
+    response_model=RecommendationResponse,
+    dependencies=[Depends(rate_limit(READ_BUDGET))],
+)
 def recommend_from_track(
     track_id: str,
     db: Session = Depends(get_db),
@@ -74,7 +79,12 @@ def recommend_from_track(
     )
 
 
-@router.get("/text", response_model=RecommendationResponse)
+# Tighter budget: an uncached query costs a transformer forward pass.
+@router.get(
+    "/text",
+    response_model=RecommendationResponse,
+    dependencies=[Depends(rate_limit(SEARCH_BUDGET))],
+)
 def recommend_from_text(
     q: str = Query(..., min_length=2, description="e.g. 'rainy day lo-fi with soft piano'"),
     db: Session = Depends(get_db),

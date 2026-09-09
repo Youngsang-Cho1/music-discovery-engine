@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.api.rate_limit import EVENT_BUDGET, rate_limit
 from app.db import get_db
 from app.experiments import bandit
 from app.models import InteractionEvent
@@ -20,7 +21,13 @@ _REWARD_ACTIONS = {"complete", "like"}
 _PENALTY_ACTIONS = {"skip"}
 
 
-@router.post("/events", status_code=202)
+# Highest budget: one impression event per rendered row means a single
+# page view legitimately produces ~20 requests.
+@router.post(
+    "/events",
+    status_code=202,
+    dependencies=[Depends(rate_limit(EVENT_BUDGET))],
+)
 def log_event(event: EventIn, db: Session = Depends(get_db)):
     """Record one interaction and, if it resolves an impression, update the arm."""
     db.add(

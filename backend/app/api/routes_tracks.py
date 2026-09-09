@@ -3,11 +3,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.api.rate_limit import READ_BUDGET, rate_limit
 from app.db import get_db
 from app.models import Track
 from app.schemas import TrackOut
 
-router = APIRouter(prefix="/tracks", tags=["tracks"])
+router = APIRouter(
+    prefix="/tracks",
+    tags=["tracks"],
+    dependencies=[Depends(rate_limit(READ_BUDGET))],
+)
 
 
 @router.get("", response_model=list[TrackOut])

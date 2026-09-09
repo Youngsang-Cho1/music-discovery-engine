@@ -45,6 +45,16 @@ def _client():
         return None
 
 
+def get_client():
+    """The shared Redis client, or None when Redis is unreachable.
+
+    Exposed for callers that need commands beyond get/set — rate limiting uses
+    a sorted set — while still going through the same connection and the same
+    "None means degrade, don't raise" contract.
+    """
+    return _client()
+
+
 def make_key(namespace: str, **parts: Any) -> str:
     """Deterministic key from keyword parts.
 

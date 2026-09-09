@@ -114,6 +114,15 @@ so averaging unit vectors moves the result toward whatever they agree on while
 the parts they disagree about cancel. Max would just select one window back out
 and reintroduce the variance.
 
+**Changing this splits the index.** Vectors built the old way and the new way
+still occupy the same space and still return a cosine, so nothing errors — the
+similarities are simply wrong across the boundary, and the same track's two
+representations agree at only ~0.56–0.89. Re-ingesting doesn't fix it either,
+since that only touches tracks the Jamendo query happens to return.
+`scripts/reembed.py` walks Postgres instead, so every stored track is
+refreshed. Any future change to the model, window count, or pooling has to be
+followed by a full re-embed for the same reason.
+
 ### Catalog diversity
 
 Ingesting by `popularity_total` returns the same global head no matter which

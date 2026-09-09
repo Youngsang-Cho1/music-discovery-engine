@@ -125,18 +125,34 @@ followed by a full re-embed for the same reason.
 
 ### Catalog diversity
 
-Ingesting by `popularity_total` returns the same global head no matter which
-tag is attached — measured at **0 new tracks out of 100** once that head is
-already stored, against ~100% new for `releasedate_desc`, `id_asc`, or `name`.
-Diversity comes from varying the *sort*, so ingestion sweeps tag × order
-combinations:
+An unfiltered `popularity_total` ingest lands almost entirely in a couple of
+genres. Once that head is stored, re-querying it with a tag returns nothing new
+— but only for the genres the head already covered. Measured against a
+1,477-track catalog built that way, per-genre popularity still had this much
+untouched:
+
+| Genre | New in top 199 | New in the next 199 |
+| --- | --- | --- |
+| metal, blues | 197 | 199 |
+| reggae, world, classical, funk | 185–189 | 199 |
+| jazz, hiphop, ambient, folk, soundtrack | 151–185 | 198–199 |
+| **electronic, pop** | **0** | 74–190 |
+
+Only `electronic` and `pop` were saturated, because those dominate the global
+popularity ranking the first pass drew from. So the fix is to make popularity
+*per genre* rather than to abandon popularity — going by release date instead
+trades a well-produced catalog for whatever happened to be uploaded recently:
 
 ```bash
 python -m app.ingestion.pipeline \
-  --target 120 \
-  --tags "electronic,rock,jazz,classical,hiphop,ambient,folk,metal,pop,funk" \
-  --orders "releasedate_desc,id_asc,name"
+  --target 400 \
+  --tags "metal,blues,reggae,world,classical,jazz,funk,hiphop,ambient,folk,soundtrack,rock,electronic,pop" \
+  --orders "popularity_total"
 ```
+
+`--orders` accepts several sorts and sweeps every tag × order pair, so
+`releasedate_desc,id_asc` is available for reaching further into the long tail
+once the popular head of each genre is in.
 
 The sweep runs in one process because CLAP takes ~26s to load; a shell loop
 over the CLI paid that once per combination, which dominated the actual work.

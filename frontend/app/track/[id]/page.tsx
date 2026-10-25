@@ -9,7 +9,7 @@ import { ResultsList } from "@/components/ResultsList";
 import { ResultsSkeleton, Skeleton } from "@/components/Skeleton";
 import { usePlayer } from "@/components/PlayerProvider";
 import { getTrack, recommendByTrack } from "@/lib/api";
-import { formatDuration } from "@/lib/format";
+import { formatDuration, formatPlays, reachTier } from "@/lib/format";
 import type { RecommendationResponse, Track } from "@/lib/types";
 
 export default function TrackPage({ params }: PageProps<"/track/[id]">) {
@@ -102,6 +102,18 @@ export default function TrackPage({ params }: PageProps<"/track/[id]">) {
                   {seed.artist_name ?? "Unknown artist"}
                   {seed.album_name && ` · ${seed.album_name}`}
                   {seed.duration_sec ? ` · ${formatDuration(seed.duration_sec)}` : ""}
+                </p>
+                {/* Stated on the seed because this is the page where someone
+                    decides whether the neighbours are worth trusting: a seed
+                    nobody has played says the match came from the audio. */}
+                <p className="mt-1 text-xs text-white/35">
+                  {reachTier(seed.listens) === "unheard" ? (
+                    <span className="text-emerald-300/70">
+                      No recorded plays — found by sound alone
+                    </span>
+                  ) : (
+                    `${formatPlays(seed.listens)} plays on Jamendo`
+                  )}
                 </p>
               </div>
 

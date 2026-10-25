@@ -120,3 +120,40 @@ export function readableFeatures(features: Record<string, number>): ReadableFeat
   const order = Object.keys(RANGES);
   return out.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
 }
+
+/**
+ * Compact play count: 1_672_904 -> "1.7M".
+ *
+ * Exact counts are noise at this scale — nobody reads the difference between
+ * 1,672,904 and 1,681,220 — and the column has to stay narrow enough to sit
+ * next to the duration without pushing the title out.
+ */
+export function formatPlays(listens: number | null | undefined): string {
+  const n = listens ?? 0;
+  if (!Number.isFinite(n) || n < 0) return "0";
+  if (n < 1_000) return String(Math.floor(n));
+  if (n < 1_000_000) {
+    const k = n / 1_000;
+    return `${k < 10 ? k.toFixed(1) : Math.round(k)}K`;
+  }
+  const m = n / 1_000_000;
+  return `${m < 10 ? m.toFixed(1) : Math.round(m)}M`;
+}
+
+/**
+ * How far a track has travelled, as three buckets the UI styles differently.
+ *
+ * `unheard` is the load-bearing one. The `novelty` signal is defined against
+ * play count, and the `discovery` arm exists to surface tracks the popularity
+ * ranking never would. Without a visible marker, that arm's results look
+ * identical to any other list and the whole claim is invisible to the person
+ * using it — which is how the signal stayed broken for as long as it did.
+ */
+export type ReachTier = "unheard" | "deep-cut" | "popular";
+
+export function reachTier(listens: number | null | undefined): ReachTier {
+  const n = listens ?? 0;
+  if (n <= 0) return "unheard";
+  if (n < 1_000) return "deep-cut";
+  return "popular";
+}

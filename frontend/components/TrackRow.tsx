@@ -4,7 +4,7 @@ import Link from "next/link";
 
 import { Artwork } from "./Artwork";
 import { usePlayer, type PlayContext } from "./PlayerProvider";
-import { dominantSignal, formatDuration } from "@/lib/format";
+import { dominantSignal, formatDuration, formatPlays, reachTier } from "@/lib/format";
 import type { Signals, Track } from "@/lib/types";
 
 interface Props {
@@ -27,6 +27,39 @@ function EqualizerBars() {
           style={{ animationDelay: `${i * 0.15}s`, height: "100%" }}
         />
       ))}
+    </span>
+  );
+}
+
+/** Play count, or a badge when there is none.
+ *
+ *  A zero here is the thing worth seeing: the catalog is reachable by sound
+ *  rather than by popularity, so a track nobody has played is still a result.
+ *  Shown as a word instead of "0" because "0" reads as missing data. */
+function Reach({ listens }: { listens: number }) {
+  const tier = reachTier(listens);
+
+  if (tier === "unheard") {
+    return (
+      <span
+        title="No recorded plays — surfaced by sound alone"
+        className="hidden w-16 shrink-0 justify-end sm:flex"
+      >
+        <span className="rounded-full bg-emerald-400/10 px-2 py-0.5 text-[10px] font-medium text-emerald-300/80">
+          unheard
+        </span>
+      </span>
+    );
+  }
+
+  return (
+    <span
+      title={`${listens.toLocaleString()} plays`}
+      className={`hidden w-16 shrink-0 text-right text-xs tabular-nums sm:block ${
+        tier === "deep-cut" ? "text-emerald-300/40" : "text-white/25"
+      }`}
+    >
+      {formatPlays(listens)}
     </span>
   );
 }
@@ -99,6 +132,8 @@ export function TrackRow({ track, context, queue, signals, index }: Props) {
           </span>
         ))}
       </div>
+
+      <Reach listens={track.listens} />
 
       <span className="w-11 shrink-0 text-right text-xs text-white/35 tabular-nums">
         {formatDuration(track.duration_sec)}

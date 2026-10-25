@@ -10,6 +10,10 @@ export interface Track {
   share_url: string | null;
   tags: string[];
   features: Record<string, number>;
+  /** Jamendo play count. Drives the `novelty` ranking signal; a zero is the
+   *  case the `discovery` arm exists to surface, so the UI marks it. */
+  listens: number;
+  favorites: number;
 }
 
 /** Per-signal contributions behind one recommendation, used to explain it. */

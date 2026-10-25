@@ -16,6 +16,11 @@ class TrackOut(BaseModel):
     share_url: str | None = None
     tags: list[str] = Field(default_factory=list)
     features: dict[str, float] = Field(default_factory=dict)
+    # Exposed so the UI can show what the `novelty` signal is reacting to. A
+    # zero here is the claim this project is built on: a track with no
+    # listening history is still retrievable.
+    listens: int = 0
+    favorites: int = 0
 
     model_config = {"from_attributes": True}
 
